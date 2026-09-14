@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..models import (User, Role, ROLE_RANK, AuditLog, Course, LessonProgress, Lesson,
                       Project, Event, Attendance, Challenge, Submission, Certificate,
-                      Competition, PointsLedgerEntry, Registration, Skill)
+                      Competition, PointsLedgerEntry, Registration, Skill, Achievement,
+                      ProjectMember, ProjectState)
 from ..schemas import RoleUpdate
 from ..security import get_current_user, require_role, has_role
 from .. import engine
@@ -143,9 +144,10 @@ Available commands:
   role <email> <ROLE>                  set a member's role (MEMBER..SUPER_ADMIN)
   rename <email> <new name>            rename a member
   hide <email> / unhide <email>        toggle leaderboard visibility
-  achievement <email> <key>            grant an achievement (e.g. competition_winner)
+  achievement <email> <key|all>        grant one achievement, or 'all' to unlock every one
   cert <email> <kind> | <title>        issue a certificate
   reset points <email>                 wipe a member's points ledger
+  seed projects                        add 9 curated projects to the public showcase
   stats                                club-wide counts
 Use 'me' as <email> to target yourself."""
 
@@ -265,6 +267,14 @@ def _run_console(db: Session, actor: User, raw: str) -> str:
         u = _find_user(db, actor, parts[1])
         if not u:
             return f"! no user '{parts[1]}'"
+        if parts[2] == "all":
+            keys = [a.key for a in db.execute(select(Achievement)).scalars()]
+            granted = 0
+            for k in keys:
+                if engine.grant_achievement(db, u.id, k, "console"):
+                    granted += 1
+            db.commit()
+            return f"✓ unlocked {granted}/{len(keys)} achievements for {u.name}"
         r = engine.grant_achievement(db, u.id, parts[2], "console")
         db.commit()
         return f"✓ granted '{parts[2]}' to {u.name}" if r else f"! unknown/duplicate achievement '{parts[2]}'"
@@ -288,7 +298,101 @@ def _run_console(db: Session, actor: User, raw: str) -> str:
         db.commit()
         return f"✓ wiped points ledger for {u.name}"
 
+    if cmd == "seed" and len(parts) >= 2 and parts[1] == "projects":
+        return _seed_showcase_projects(db, actor)
+
     return f"! unknown command '{raw}'. Type 'help'."
+
+
+# Curated public showcase projects. Idempotent: skips any slug that already exists.
+SHOWCASE_PROJECTS = [
+    dict(slug="campus-navigator", title="Campus Navigator",
+         problem="New students get lost finding classrooms and labs on campus.",
+         solution="Indoor wayfinding PWA with interactive maps and turn-by-turn routing.",
+         description="A progressive web app that maps every building, room and lab, with search and shortest-path routing between locations.",
+         tech=["React", "TypeScript", "Leaflet", "PWA"],
+         repo="https://github.com/technova/campus-navigator", demo="https://technova.club/demos/navigator"),
+    dict(slug="studybuddy-ai", title="StudyBuddy AI",
+         problem="Students struggle to make good revision notes and quizzes.",
+         solution="An AI tutor that turns lecture PDFs into flashcards and practice quizzes.",
+         description="Upload notes and StudyBuddy generates summaries, spaced-repetition flashcards and auto-graded quizzes.",
+         tech=["Python", "FastAPI", "OpenAI", "React"],
+         repo="https://github.com/technova/studybuddy-ai", demo="https://technova.club/demos/studybuddy"),
+    dict(slug="ecobin-tracker", title="EcoBin Tracker",
+         problem="Campus recycling bins overflow and waste isn't sorted properly.",
+         solution="Smart bins with fill sensors and a live dashboard for the facilities team.",
+         description="ESP32 ultrasonic sensors report bin fill levels; a dashboard flags bins needing collection and tracks recycling rates.",
+         tech=["Arduino", "ESP32", "MQTT", "Node.js"],
+         repo="https://github.com/technova/ecobin", demo="https://technova.club/demos/ecobin"),
+    dict(slug="clubchat", title="ClubChat",
+         problem="Club announcements get lost across WhatsApp and email.",
+         solution="A realtime chat + announcements hub built just for the club.",
+         description="Channels, threads, and pinned announcements with realtime delivery over WebSockets.",
+         tech=["React", "Socket.IO", "Node.js", "PostgreSQL"],
+         repo="https://github.com/technova/clubchat", demo="https://technova.club/demos/clubchat"),
+    dict(slug="gesture-game", title="Gesture Arcade",
+         problem="Accessibility: not everyone can use a keyboard for games.",
+         solution="Play retro arcade games using hand gestures via the webcam.",
+         description="Computer-vision hand tracking maps gestures to game controls for a set of browser mini-games.",
+         tech=["Python", "MediaPipe", "OpenCV", "JavaScript"],
+         repo="https://github.com/technova/gesture-arcade", demo="https://technova.club/demos/gesture"),
+    dict(slug="lab-booking", title="Lab Slot Booking",
+         problem="Fights over who booked the 3D printer and lab equipment.",
+         solution="A booking system with calendars, approvals and reminders.",
+         description="Members reserve equipment slots; mentors approve; email + in-app reminders prevent no-shows.",
+         tech=["React", "FastAPI", "SQLite"],
+         repo="https://github.com/technova/lab-booking", demo="https://technova.club/demos/labbooking"),
+    dict(slug="code-arena", title="Code Arena",
+         problem="Practicing for coding contests alone is boring and hard to track.",
+         solution="A head-to-head competitive coding playground with live scoreboards.",
+         description="Real-time 1v1 coding duels with a sandboxed judge, ELO ratings and weekly ladders.",
+         tech=["TypeScript", "React", "Docker", "WebSockets"],
+         repo="https://github.com/technova/code-arena", demo="https://technova.club/demos/codearena"),
+    dict(slug="weather-balloon", title="High-Altitude Weather Balloon",
+         problem="No affordable way for students to collect real atmospheric data.",
+         solution="A near-space balloon payload logging telemetry and capturing photos.",
+         description="A Raspberry Pi payload logs GPS, temperature and pressure to 30km altitude and streams recovered imagery.",
+         tech=["Raspberry Pi", "Python", "LoRa", "Sensors"],
+         repo="https://github.com/technova/weather-balloon", demo="https://technova.club/demos/balloon"),
+    dict(slug="portfolio-builder", title="Portfolio Builder",
+         problem="Members have projects but no polished way to show them to recruiters.",
+         solution="One-click developer portfolios generated from your TECHNOVA profile.",
+         description="Pulls your skills, projects and certificates into a shareable, themeable portfolio site.",
+         tech=["Next.js", "TypeScript", "Tailwind"],
+         repo="https://github.com/technova/portfolio-builder", demo="https://technova.club/demos/portfolio"),
+]
+
+
+def _seed_showcase_projects(db: Session, actor: User) -> str:
+    """Populate the public showcase with curated projects. Idempotent."""
+    existing = {p.slug for p in db.execute(select(Project)).scalars()}
+    # Spread ownership/builders across real members (fall back to actor if none seeded).
+    pool = db.execute(
+        select(User).where(User.role.in_([Role.MEMBER.value, Role.COMMITTEE.value,
+                                          Role.MENTOR.value, Role.CLUB_HEAD.value]))
+    ).scalars().all() or [actor]
+    created = 0
+    for idx, spec in enumerate(SHOWCASE_PROJECTS):
+        if spec["slug"] in existing:
+            continue
+        b1 = pool[idx % len(pool)]
+        b2 = pool[(idx + 1) % len(pool)]
+        team = [b1] if b2.id == b1.id else [b1, b2]
+        proj = Project(slug=spec["slug"], title=spec["title"], problem=spec["problem"],
+                       solution=spec["solution"], description=spec["description"],
+                       required_skills=[], team_size=max(2, len(team)),
+                       state=ProjectState.SHOWCASE.value, owner_id=team[0].id,
+                       tech=spec["tech"], showcase=True,
+                       repo_url=spec["repo"], demo_url=spec["demo"])
+        db.add(proj)
+        db.flush()
+        for i, member in enumerate(team):
+            db.add(ProjectMember(project_id=proj.id, user_id=member.id,
+                                 role="Lead" if i == 0 else "Contributor", status="member"))
+        created += 1
+    db.commit()
+    total = db.query(Project).filter(Project.showcase == True).count()  # noqa
+    return f"✓ added {created} showcase project(s); showcase now has {total} total"
 
 
 @router.post("/console")
