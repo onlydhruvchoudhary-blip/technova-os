@@ -71,12 +71,6 @@ export default function Auth() {
               {mode === 'login' ? 'Create an account' : 'Sign in'}
             </a>
           </p>
-          <div className="card" style={{ marginTop: 18, background: 'var(--bg-2)', fontSize: 12.5 }}>
-            <strong>Demo accounts</strong> (password: <code className="mono">password123</code>)
-            <div className="faint" style={{ marginTop: 6 }}>
-              admin@technova.club · head@technova.club · mentor@technova.club · isha@technova.club
-            </div>
-          </div>
         </div>
       </div>
     </div>
