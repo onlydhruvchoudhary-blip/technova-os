@@ -4,7 +4,7 @@
 - **Code judge** supports Python function-signature problems judged by return value. Stdin/stdout
   problems and other languages aren't supported yet. For scale it should move from a subprocess
   guard to a container/nsjail/gVisor sandbox with no network.
-- **Schema management** uses `create_all`. Production schema evolution needs Alembic migrations
+- **Schema management** uses **Alembic migrations** (auto-applied on startup, with safe stamping of pre-existing DBs).
   (models are structured to make this straightforward).
 - **Event bus is in-process & synchronous.** Great for a school-scale deployment; heavy async work
   (e.g. large batch emails) would want a real queue (Celery/RQ + Redis).

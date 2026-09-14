@@ -26,6 +26,24 @@ Seven ascending roles: `GUEST < MEMBER < COMMITTEE < MENTOR < ADVISOR < CLUB_HEA
 | Role abuse | Role assignment rules + audit log. |
 | Privileged action tracking | **Audit log** on role changes, event/competition creation, scoring, revocation, state changes. |
 
+## Transport / browser hardening (HTTP response headers)
+Applied by `SecurityHeadersMiddleware` to every response:
+
+| Header | Value | Notes |
+|---|---|---|
+| `Content-Security-Policy` | `default-src 'self'`; `script-src 'self'`; `style-src 'self' 'unsafe-inline'`; `img-src 'self' data:`; `object-src 'none'`; `base-uri 'self'`; `form-action 'self'`; `connect-src 'self'` | App loads no external scripts/fonts/images; `unsafe-inline` style is required for React inline `style` attributes. `frame-ancestors` deliberately omitted (see below). |
+| `X-Content-Type-Options` | `nosniff` | Always. |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | Always. |
+| `X-XSS-Protection` | `0` | Modern guidance: rely on CSP, disable the legacy auditor. |
+| `Permissions-Policy` | `geolocation=(), microphone=(), camera=()` | Always. |
+| `X-Frame-Options` | `SAMEORIGIN` | **Production only** (would break the cross-origin dev/preview iframe). |
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` | **Production only.** |
+
+## Observability
+`RequestContextMiddleware` stamps every response with `X-Request-ID` (echoing an inbound id if
+present) and `X-Response-Time-ms`, and emits a structured `technova.access` log line per request
+(method, path, status, duration, request id) — enough to trace and support a live deployment.
+
 ## Privacy — collect the minimum
 - Only name + email + password are collected at registration. No phone, address, DOB, etc.
 - Private data (member emails, attendance, draft projects, mentor feedback, admin data) is gated
@@ -37,4 +55,7 @@ Seven ascending roles: `GUEST < MEMBER < COMMITTEE < MENTOR < ADVISOR < CLUB_HEA
 - [ ] Restrict CORS `allow_origins` to your domain (currently `*` for dev convenience).
 - [ ] Serve over HTTPS (reverse proxy).
 - [ ] Move the code judge to a container/nsjail/gVisor sandbox with no network for scale.
-- [ ] Add Alembic migrations; take regular DB backups (compose `backup` service does nightly).
+- [x] Security headers (CSP + nosniff + Referrer-Policy + Permissions-Policy always; X-Frame-Options + HSTS in production).
+- [x] Per-request tracing (`X-Request-ID`, `X-Response-Time-ms`, structured access log).
+- [x] CI gate (`ruff` lint + fresh-DB `alembic upgrade` + `pytest` + frontend typecheck/build) on every push.
+- [x] Alembic migrations in place (auto-applied on startup); nightly DB backups via compose `backup` service.

@@ -13,16 +13,18 @@ and no network. The subprocess + AST guard here is a solid first layer and keeps
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
-import textwrap
-import os
 
 TIME_LIMIT_SECONDS = 5
 BLOCKED = ["import os", "import sys", "import subprocess", "import shutil", "import socket",
            "__import__", "open(", "eval(", "exec(", "compile(", "input(", "import ctypes",
-           "importlib", "globals(", "getattr(__", "os.system", "pty", "signal"]
+           "importlib", "globals(", "getattr(__", "os.system", "pty", "signal",
+           "import threading", "import multiprocessing", "import asyncio", "fork",
+           "__subclasses__", "__globals__", "__builtins__", "marshal", "import mmap",
+           "import fcntl", "import requests", "import urllib", "import http"]
 
 HARNESS = r'''
 import json, sys, builtins, resource
@@ -37,8 +39,10 @@ for _b in ["open", "input"]:
         pass
 
 try:
-    resource.setrlimit(resource.RLIMIT_AS, (256 * 1024 * 1024, 256 * 1024 * 1024))
-    resource.setrlimit(resource.RLIMIT_CPU, (5, 5))
+    resource.setrlimit(resource.RLIMIT_AS, (256 * 1024 * 1024, 256 * 1024 * 1024))  # 256MB memory
+    resource.setrlimit(resource.RLIMIT_CPU, (5, 5))                                 # 5s CPU
+    resource.setrlimit(resource.RLIMIT_NPROC, (0, 0))                               # no fork/exec (fork bomb guard)
+    resource.setrlimit(resource.RLIMIT_FSIZE, (0, 0))                               # no file writes
 except Exception:
     pass
 

@@ -117,6 +117,42 @@ export default function Admin() {
                 {analytics.projects_by_tech.map((t: any) => <span key={t.tech} className="badge a">{t.tech} · {t.count}</span>)}</div>
             </div>
           )}
+
+          {analytics.activity_trend && (() => {
+            const trend = analytics.activity_trend
+            const max = Math.max(1, ...trend.map((w: any) => w.points))
+            return (
+              <div className="card" style={{ marginTop: 16 }}>
+                <h3 style={{ marginTop: 0 }}>Activity trend <span className="faint" style={{ fontWeight: 400, fontSize: 12 }}>· points earned / week</span></h3>
+                <div className="row" style={{ alignItems: 'flex-end', gap: 10, height: 140, paddingTop: 8 }}>
+                  {trend.map((w: any, i: number) => (
+                    <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+                      <div className="faint" style={{ fontSize: 11 }}>{w.points > 0 ? w.points : ''}</div>
+                      <div title={`${w.week}: ${w.points} pts`} style={{
+                        width: '100%', maxWidth: 46, height: `${Math.round((w.points / max) * 100)}%`,
+                        minHeight: w.points > 0 ? 4 : 2,
+                        background: w.points > 0 ? 'var(--grad)' : 'var(--surface-2)',
+                        borderRadius: '6px 6px 0 0', transition: 'height .4s',
+                      }} />
+                      <div className="faint" style={{ fontSize: 10 }}>{w.week}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          })()}
+
+          {analytics.role_distribution && analytics.role_distribution.length > 0 && (
+            <div className="card" style={{ marginTop: 16 }}><h3 style={{ marginTop: 0 }}>Role distribution</h3>
+              <div className="row wrap" style={{ gap: 8 }}>
+                {analytics.role_distribution.map((r: any) => (
+                  <span key={r.role} className="row" style={{ gap: 6, padding: '4px 10px', borderRadius: 8, background: 'var(--bg-2)', fontSize: 13 }}>
+                    <RoleBadge role={r.role} /><strong>{r.count}</strong>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

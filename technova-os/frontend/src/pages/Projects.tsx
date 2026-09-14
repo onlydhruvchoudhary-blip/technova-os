@@ -43,7 +43,7 @@ export default function Projects() {
       {projects.length === 0 ? <Empty icon="🛠️" title="No projects yet" sub="Start the first one!" /> : (
         <div className="grid g3">
           {projects.map(p => (
-            <Link to={`/projects/${p.slug}`} key={p.id} className="card" style={{ display: 'block' }}>
+            <Link to={`/projects/${p.slug}`} key={p.id} className="card card-hover" style={{ display: 'block' }}>
               <div className="row between" style={{ marginBottom: 8 }}>
                 <StateBadge state={p.state} />
                 <span className="faint" style={{ fontSize: 12 }}>👥 {p.member_count}/{p.team_size}</span>

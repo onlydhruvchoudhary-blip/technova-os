@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import datetime as dt
-from pydantic import BaseModel, EmailStr, Field, ConfigDict
+
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 # ---- auth

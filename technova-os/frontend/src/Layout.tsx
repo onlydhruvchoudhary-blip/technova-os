@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth, useTheme } from './store'
-import { api } from './api'
+import { api, getToken } from './api'
 import { Avatar, RoleBadge } from './ui'
 
 const NAV = [
@@ -42,12 +42,51 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const [notifs, setNotifs] = useState<any[]>([])
   const [q, setQ] = useState('')
   const [results, setResults] = useState<any[]>([])
+  const [activeIdx, setActiveIdx] = useState(0)
+  const searchRef = React.useRef<HTMLInputElement>(null)
   const isAdmin = user && ADMIN_ROLES.includes(user.role)
+
+  // ⌘K / Ctrl+K focuses global search; Esc clears it.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault(); searchRef.current?.focus()
+      } else if (e.key === 'Escape') {
+        setResults([]); setQ(''); searchRef.current?.blur()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
 
   const loadNotifs = async () => {
     try { const d = await api.get('/notifications'); setUnread(d.unread); setNotifs(d.items) } catch {}
   }
-  useEffect(() => { loadNotifs(); const t = setInterval(loadNotifs, 20000); return () => clearInterval(t) }, [])
+  // Prefer a real-time SSE stream; fall back to polling if EventSource is unavailable or errors.
+  useEffect(() => {
+    loadNotifs()
+    let es: EventSource | null = null
+    let poll: ReturnType<typeof setInterval> | null = null
+    const startPolling = () => { if (!poll) poll = setInterval(loadNotifs, 20000) }
+    try {
+      const token = getToken()
+      if (token && 'EventSource' in window) {
+        es = new EventSource(`/api/notifications/stream?token=${encodeURIComponent(token)}`)
+        es.onmessage = (ev) => {
+          try {
+            const d = JSON.parse(ev.data)
+            if (typeof d.unread === 'number') setUnread(d.unread)
+            // refresh the list contents when a new one arrives
+            if (d.latest) loadNotifs()
+          } catch { /* ignore malformed frame */ }
+        }
+        es.onerror = () => { /* browser auto-reconnects; also keep a slow poll as safety net */ startPolling() }
+      } else {
+        startPolling()
+      }
+    } catch { startPolling() }
+    return () => { es?.close(); if (poll) clearInterval(poll) }
+  }, [])
   useEffect(() => { setNotifOpen(false); setResults([]); setQ('') }, [loc.pathname])
 
   useEffect(() => {
@@ -101,12 +140,23 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       <div className="main">
         <div className="topbar">
           <div style={{ position: 'relative', flex: 1, maxWidth: 420 }}>
-            <input className="input" placeholder="Search projects, courses, members…"
-              value={q} onChange={e => setQ(e.target.value)} style={{ padding: '8px 12px' }} />
+            <input ref={searchRef} className="input" placeholder="Search projects, courses, members…   ⌘K"
+              value={q} onChange={e => { setQ(e.target.value); setActiveIdx(0) }}
+              onKeyDown={e => {
+                if (!results.length) return
+                if (e.key === 'ArrowDown') { e.preventDefault(); setActiveIdx(i => Math.min(i + 1, results.length - 1)) }
+                else if (e.key === 'ArrowUp') { e.preventDefault(); setActiveIdx(i => Math.max(i - 1, 0)) }
+                else if (e.key === 'Enter') {
+                  const r = results[activeIdx]; if (!r) return
+                  r.link.startsWith('http') ? window.open(r.link) : nav(r.link); setResults([]); setQ('')
+                }
+              }}
+              style={{ padding: '8px 12px' }} />
             {results.length > 0 && (
               <div className="card" style={{ position: 'absolute', top: 44, left: 0, right: 0, zIndex: 40, padding: 6 }}>
                 {results.map((r, i) => (
-                  <div key={i} className="nav-item" style={{ margin: 0 }}
+                  <div key={i} className={`nav-item${i === activeIdx ? ' active' : ''}`} style={{ margin: 0 }}
+                    onMouseEnter={() => setActiveIdx(i)}
                     onClick={() => { r.link.startsWith('http') ? window.open(r.link) : nav(r.link); setResults([]); setQ('') }}>
                     <span className="badge" style={{ marginRight: 6 }}>{r.type}</span>{r.title}
                   </div>

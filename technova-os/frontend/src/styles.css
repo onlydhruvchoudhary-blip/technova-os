@@ -234,3 +234,39 @@ tr:hover td { background: var(--surface-2); }
 .loading { display: grid; place-items: center; min-height: 60vh; color: var(--text-dim); }
 .spinner { width: 34px; height: 34px; border: 3px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---- Iteration polish: subtle motion + finer responsive grid ---- */
+
+/* Gentle fade-in for routed page content (respects reduced-motion). */
+.content > * { animation: pageIn .22s ease both; }
+@keyframes pageIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+/* Interactive cards (links / clickable) lift slightly on hover. Opt-in via .card-hover. */
+.card-hover { transition: transform .14s ease, border-color .14s ease, box-shadow .14s ease; }
+.card-hover:hover {
+  transform: translateY(-2px);
+  border-color: var(--primary);
+  box-shadow: 0 8px 24px rgba(0,0,0,.18);
+}
+
+/* Focus-visible ring for keyboard users (accessibility). */
+a:focus-visible, .btn:focus-visible, .input:focus-visible, button:focus-visible {
+  outline: 2px solid var(--primary); outline-offset: 2px;
+}
+
+/* Intermediate breakpoint: keep 2-up grids on tablets/large phones before collapsing. */
+@media (max-width: 860px) and (min-width: 540px) {
+  .g3, .g4 { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* Skeleton shimmer utility for loading states. */
+.skeleton {
+  background: linear-gradient(90deg, var(--surface-2) 25%, var(--border) 37%, var(--surface-2) 63%);
+  background-size: 400% 100%; border-radius: 8px; animation: shimmer 1.4s ease infinite;
+}
+@keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+
+/* Honor users who prefer reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  .content > *, .card-hover, .skeleton, .toast, .spinner { animation: none !important; transition: none !important; }
+}

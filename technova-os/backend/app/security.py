@@ -6,7 +6,7 @@ import hashlib
 import hmac
 import time
 
-from fastapi import Depends, HTTPException, status, Request
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .database import get_db
-from .models import User, Role, ROLE_RANK
+from .models import ROLE_RANK, Role, User
 
 settings = get_settings()
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -32,7 +32,7 @@ def verify_password(raw: str, hashed: str) -> bool:
 
 
 def create_access_token(user_id: int) -> str:
-    expire = dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=settings.access_token_expire_minutes)
+    expire = dt.datetime.now(dt.UTC) + dt.timedelta(minutes=settings.access_token_expire_minutes)
     payload = {"sub": str(user_id), "exp": expire}
     return jwt.encode(payload, settings.secret_key, algorithm=ALGO)
 
@@ -67,11 +67,22 @@ def get_current_user(request: Request,
         payload = jwt.decode(tok, settings.secret_key, algorithms=[ALGO])
         uid = int(payload.get("sub"))
     except (JWTError, TypeError, ValueError):
-        raise cred_exc
+        raise cred_exc from None
     user = db.get(User, uid)
     if not user or not user.is_active:
         raise cred_exc
     return user
+
+
+def user_from_token(token: str, db: Session) -> User | None:
+    """Resolve a User from a raw JWT string. Used where dependency injection of the
+    Authorization header isn't possible (e.g. an SSE EventSource passes ?token=...)."""
+    try:
+        payload = jwt.decode(token, settings.secret_key, algorithms=[ALGO])
+        user = db.get(User, int(payload.get("sub")))
+    except (JWTError, TypeError, ValueError):
+        return None
+    return user if (user and user.is_active) else None
 
 
 def get_optional_user(request: Request,

@@ -13,17 +13,25 @@ from __future__ import annotations
 
 import datetime as dt
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .models import (
-    PointsLedgerEntry, User, UserSkill, Skill, SKILL_TIER_XP, SKILL_TIERS,
-    Achievement, UserAchievement, Notification, Certificate, utcnow,
+    SKILL_TIERS,
+    Achievement,
+    Certificate,
+    Notification,
+    PointsLedgerEntry,
+    Skill,
+    User,
+    UserAchievement,
+    UserSkill,
+    utcnow,  # noqa: F401  re-exported as engine.utcnow for routers
 )
 from .security import sign_certificate
 
@@ -66,7 +74,7 @@ def emit(db: Session, event: Event) -> list[dict]:
 
 # --------------------------------------------------------------------------- points
 def _points_today(db: Session, user_id: int, category: str) -> int:
-    start = dt.datetime.now(dt.timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    start = dt.datetime.now(dt.UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     total = db.execute(
         select(func.coalesce(func.sum(PointsLedgerEntry.points), 0))
         .where(PointsLedgerEntry.user_id == user_id)

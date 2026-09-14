@@ -43,3 +43,25 @@ def test_runtime_error_handled():
     code = "def add(a, b):\n    return a + undefined_var\n"
     res = judge(code, "add", [{"args": [1, 2], "expected": 3}], [])
     assert res["passed"] is False
+
+
+def test_blocked_threading_rejected():
+    code = "import threading\ndef add(a, b):\n    return a + b\n"
+    res = judge(code, "add", [{"args": [1, 2], "expected": 3}], [])
+    assert res["passed"] is False
+    assert "Disallowed" in res["feedback"]
+
+
+def test_blocked_dunder_escape_rejected():
+    # classic sandbox escape via __subclasses__
+    code = "def add(a, b):\n    return ().__class__.__subclasses__()\n"
+    res = judge(code, "add", [{"args": [1, 2], "expected": 3}], [])
+    assert res["passed"] is False
+    assert "Disallowed" in res["feedback"]
+
+
+def test_blocked_network_rejected():
+    code = "import urllib\ndef add(a, b):\n    return a + b\n"
+    res = judge(code, "add", [{"args": [1, 2], "expected": 3}], [])
+    assert res["passed"] is False
+    assert "Disallowed" in res["feedback"]

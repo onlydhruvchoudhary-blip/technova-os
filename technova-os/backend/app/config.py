@@ -1,5 +1,6 @@
 """Application configuration (12-factor: everything via env)."""
 from functools import lru_cache
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 

@@ -2,16 +2,15 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..database import get_db
-from ..models import Event, Registration, Attendance, User, Role, AuditLog
-from ..schemas import EventCreate, AttendanceIn
-from ..security import (get_current_user, get_optional_user, require_role, has_role,
-                        make_qr_token, verify_qr_token)
-from ..config import get_settings
 from .. import engine
+from ..config import get_settings
+from ..database import get_db
+from ..models import Attendance, AuditLog, Event, Registration, Role, User
+from ..schemas import AttendanceIn, EventCreate
+from ..security import get_current_user, get_optional_user, make_qr_token, require_role, verify_qr_token
 
 router = APIRouter(prefix="/api/events", tags=["events"])
 settings = get_settings()

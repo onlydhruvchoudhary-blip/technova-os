@@ -5,13 +5,22 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .. import engine
 from ..database import get_db
-from ..models import (User, UserSkill, Skill, UserAchievement, Achievement,
-                      Project, ProjectMember, Certificate, Submission)
+from ..models import (
+    Achievement,
+    Certificate,
+    Project,
+    ProjectMember,
+    Role,
+    Skill,
+    Submission,
+    User,
+    UserAchievement,
+    UserSkill,
+)
 from ..schemas import UserOut
 from ..security import get_current_user, get_optional_user, has_role
-from ..models import Role
-from .. import engine
 
 router = APIRouter(prefix="/api", tags=["profile"])
 

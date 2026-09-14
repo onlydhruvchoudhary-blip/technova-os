@@ -1,20 +1,41 @@
 """Admin dashboard: member/role management, analytics, audit log, moderation. RBAC-gated."""
 from __future__ import annotations
 
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, func
+from pydantic import BaseModel
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..database import get_db
-from ..models import (User, Role, ROLE_RANK, AuditLog, Course, LessonProgress, Lesson,
-                      Project, Event, Attendance, Challenge, Submission, Certificate,
-                      Competition, PointsLedgerEntry, Registration, Skill, Achievement,
-                      ProjectMember, ProjectState)
-from ..schemas import RoleUpdate
-from ..security import get_current_user, require_role, has_role
 from .. import engine
-import uuid
-from pydantic import BaseModel
+from ..database import get_db
+from ..models import (
+    ROLE_RANK,
+    Achievement,
+    Attendance,
+    AuditLog,
+    Certificate,
+    Challenge,
+    Competition,
+    CompetitionEntry,
+    Course,
+    Event,
+    Lesson,
+    LessonProgress,
+    PointsLedgerEntry,
+    Project,
+    ProjectMember,
+    ProjectState,
+    Registration,
+    Role,
+    RubricScore,
+    Skill,
+    Submission,
+    User,
+)
+from ..schemas import RoleUpdate
+from ..security import has_role, require_role
 
 
 class ConsoleCmd(BaseModel):
@@ -40,7 +61,7 @@ def set_role(user_id: int, data: RoleUpdate, actor: User = Depends(require_role(
     try:
         new_role = Role(data.role)
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid role")
+        raise HTTPException(status_code=400, detail="Invalid role") from None
     # cannot assign a role higher than your own, and only SUPER_ADMIN can make SUPER_ADMIN
     if ROLE_RANK[new_role] >= ROLE_RANK[Role(actor.role)] and not has_role(actor, Role.SUPER_ADMIN):
         raise HTTPException(status_code=403, detail="Cannot assign a role at or above your own")
@@ -117,6 +138,34 @@ def analytics(user: User = Depends(require_role(Role.ADVISOR)), db: Session = De
             tech_counter[t] = tech_counter.get(t, 0) + 1
     projects_by_tech = sorted(tech_counter.items(), key=lambda x: x[1], reverse=True)[:8]
 
+    # 8-week activity trend: points awarded per ISO week (portable, done in Python).
+    weeks = 8
+    buckets = [0] * weeks
+    week0_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+    span_start = week0_start - timedelta(weeks=weeks - 1)
+    for created_at, pts in db.execute(
+        select(PointsLedgerEntry.created_at, PointsLedgerEntry.points)
+        .where(PointsLedgerEntry.created_at >= span_start)
+    ).all():
+        if created_at is None:
+            continue
+        # normalize tz-aware/naive
+        ca = created_at.replace(tzinfo=None) if created_at.tzinfo else created_at
+        idx = (ca - span_start.replace(tzinfo=None)).days // 7
+        if 0 <= idx < weeks:
+            buckets[idx] += int(pts or 0)
+    activity_trend = [
+        {"week": (span_start + timedelta(weeks=i)).strftime("%b %d"), "points": buckets[i]}
+        for i in range(weeks)
+    ]
+
+    # role distribution across active members
+    role_rows = db.execute(
+        select(User.role, func.count(User.id)).where(User.is_active == True)  # noqa
+        .group_by(User.role)
+    ).all()
+    role_distribution = [{"role": r, "count": int(c)} for r, c in role_rows]
+
     return {
         "club": {
             "total_members": int(total_members), "active_members": int(active),
@@ -130,6 +179,8 @@ def analytics(user: User = Depends(require_role(Role.ADVISOR)), db: Session = De
         "popular_courses": [{"title": t, "completions": int(d)} for t, d in course_rows],
         "projects_by_tech": [{"tech": t, "count": c} for t, c in projects_by_tech],
         "points_by_category": _points_by_category(db),
+        "activity_trend": activity_trend,
+        "role_distribution": role_distribution,
     }
 
 
@@ -147,7 +198,9 @@ Available commands:
   achievement <email> <key|all>        grant one achievement, or 'all' to unlock every one
   cert <email> <kind> | <title>        issue a certificate
   reset points <email>                 wipe a member's points ledger
-  seed projects                        add 9 curated projects to the public showcase
+  seed projects                        add curated projects to the public showcase
+  seed competitions                    add competitions with entries, scores & rankings
+  seed events                          add a rich event calendar
   stats                                club-wide counts
 Use 'me' as <email> to target yourself."""
 
@@ -301,6 +354,12 @@ def _run_console(db: Session, actor: User, raw: str) -> str:
     if cmd == "seed" and len(parts) >= 2 and parts[1] == "projects":
         return _seed_showcase_projects(db, actor)
 
+    if cmd == "seed" and len(parts) >= 2 and parts[1] == "competitions":
+        return _seed_competitions(db, actor)
+
+    if cmd == "seed" and len(parts) >= 2 and parts[1] == "events":
+        return _seed_events(db, actor)
+
     return f"! unknown command '{raw}'. Type 'help'."
 
 
@@ -393,6 +452,105 @@ def _seed_showcase_projects(db: Session, actor: User) -> str:
     db.commit()
     total = db.query(Project).filter(Project.showcase == True).count()  # noqa
     return f"✓ added {created} showcase project(s); showcase now has {total} total"
+
+
+def _seed_events(db: Session, actor: User) -> str:
+    """Backfill a rich event calendar. Idempotent by title."""
+    import datetime as _dt
+    now = engine.utcnow()
+    existing = {e.title for e in db.execute(select(Event)).scalars()}
+    specs = [
+        ("Intro to Python Workshop", "Hands-on Python for beginners.", "Workshop", "Computer Lab 1", 2, 40, True),
+        ("Git & GitHub Crash Course", "Version control from zero to pull requests.", "Workshop", "Computer Lab 2", 3, 35, True),
+        ("Web Dev Bootcamp: Day 1", "HTML, CSS and responsive layouts.", "Workshop", "Computer Lab 1", 7, 45, True),
+        ("Machine Learning Study Jam", "Hands-on notebooks with scikit-learn.", "Workshop", "AI Lab", 12, 30, True),
+        ("Guest Talk: Life in Big Tech", "A senior engineer shares their journey.", "Talk", "Auditorium", 14, 150, True),
+        ("Arduino Robotics Night", "Build a line-following robot.", "Workshop", "Innovation Hub", 16, 24, True),
+        ("Open Source Contribution Day", "Make your first PR to a real project.", "Hackathon", "Computer Lab 1", 21, 40, True),
+        ("TECHNOVA Demo Day", "Teams present their showcase projects.", "Showcase", "Auditorium", 28, 200, True),
+    ]
+    created = 0
+    for title, desc, kind, loc, day_off, cap, pub in specs:
+        if title in existing:
+            continue
+        db.add(Event(title=title, description=desc, kind=kind, location=loc,
+                     starts_at=now + _dt.timedelta(days=day_off, hours=3),
+                     ends_at=now + _dt.timedelta(days=day_off, hours=5),
+                     capacity=cap, is_public=pub, created_by=actor.id))
+        created += 1
+    db.commit()
+    total = db.query(Event).count()
+    return f"✓ added {created} event(s); calendar now has {total} total"
+
+
+def _seed_competitions(db: Session, actor: User) -> str:
+    """Backfill competitions with entries, rubric scores and rankings. Idempotent by title."""
+    import datetime as _dt
+    now = engine.utcnow()
+    existing = {c.title for c in db.execute(select(Competition)).scalars()}
+    pool = db.execute(
+        select(User).where(User.role.in_([Role.MEMBER.value, Role.COMMITTEE.value]))
+    ).scalars().all() or [actor]
+    judges = db.execute(
+        select(User).where(User.role.in_([Role.MENTOR.value, Role.CLUB_HEAD.value, Role.SUPER_ADMIN.value]))
+    ).scalars().all() or [actor]
+
+    specs = [
+        dict(title="Fall Hackathon 2025", kind="Hackathon",
+             description="A 24-hour sprint to build something that helps students.",
+             rubric=[{"name": "Innovation", "max": 25}, {"name": "Execution", "max": 25},
+                     {"name": "Impact", "max": 25}, {"name": "Presentation", "max": 25}],
+             status="closed", start_off=-30, end_off=-29,
+             entries=[("Team Nova", "Smart Attendance", "QR-based attendance.", [92, 88]),
+                      ("Green Guardians", "EcoBin Tracker", "Recycling dashboard.", [85, 90]),
+                      ("PixelPlay", "Gesture Arcade", "Games via hand gestures.", [78, 82]),
+                      ("DataWise", "StudyBuddy AI", "AI flashcards from notes.", [88, 84])]),
+        dict(title="Weekly Code Sprint", kind="Coding",
+             description="Solve the weekly algorithmic set for the cleanest solutions.",
+             rubric=[{"name": "Correctness", "max": 50}, {"name": "Efficiency", "max": 30},
+                     {"name": "Code Quality", "max": 20}],
+             status="judging", start_off=-3, end_off=2,
+             entries=[("Solo A", "DP Set", "All 5, O(n) solutions.", [95]),
+                      ("Solo B", "Greedy Set", "4/5 solved.", [80]),
+                      ("Solo C", "Graph Set", "All 5 with BFS/DFS.", [90])]),
+        dict(title="Spring Project Expo", kind="Project",
+             description="Showcase your best build, judged live by mentors.",
+             rubric=[{"name": "Technical Depth", "max": 30}, {"name": "Design", "max": 20},
+                     {"name": "Usefulness", "max": 30}, {"name": "Teamwork", "max": 20}],
+             status="open", start_off=5, end_off=20, entries=[]),
+    ]
+    created = 0
+    for spec in specs:
+        if spec["title"] in existing:
+            continue
+        comp = Competition(title=spec["title"], description=spec["description"], kind=spec["kind"],
+                           rubric=spec["rubric"], status=spec["status"],
+                           starts_at=now + _dt.timedelta(days=spec["start_off"]),
+                           ends_at=now + _dt.timedelta(days=spec["end_off"]), created_by=actor.id)
+        db.add(comp)
+        db.flush()
+        entry_objs = []
+        rubric_max = sum(c["max"] for c in spec["rubric"])
+        for idx, (team, title, summary, judge_totals) in enumerate(spec["entries"]):
+            owner = pool[idx % len(pool)]
+            entry = CompetitionEntry(competition_id=comp.id, user_id=owner.id, team_name=team,
+                                     title=title, summary=summary)
+            db.add(entry)
+            db.flush()
+            for j_idx, jt in enumerate(judge_totals):
+                judge = judges[j_idx % len(judges)]
+                per = {c["name"]: min(round(jt * c["max"] / rubric_max, 1), c["max"]) for c in spec["rubric"]}
+                db.add(RubricScore(entry_id=entry.id, judge_id=judge.id, scores=per,
+                                   total=float(jt), comment="Strong entry."))
+            entry.total_score = sum(judge_totals) / len(judge_totals) if judge_totals else 0.0
+            entry_objs.append(entry)
+        if spec["status"] == "closed" and entry_objs:
+            for rank, e in enumerate(sorted(entry_objs, key=lambda x: x.total_score, reverse=True), start=1):
+                e.rank = rank
+        created += 1
+    db.commit()
+    total = db.query(Competition).count()
+    return f"✓ added {created} competition(s); now {total} total"
 
 
 @router.post("/console")

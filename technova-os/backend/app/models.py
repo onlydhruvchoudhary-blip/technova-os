@@ -11,16 +11,14 @@ from __future__ import annotations
 import datetime as dt
 import enum
 
-from sqlalchemy import (
-    String, Integer, Float, Boolean, DateTime, ForeignKey, Text, UniqueConstraint, Index, JSON
-)
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
 
 
 def utcnow() -> dt.datetime:
-    return dt.datetime.now(dt.timezone.utc)
+    return dt.datetime.now(dt.UTC)
 
 
 # --------------------------------------------------------------------------- roles
@@ -185,8 +183,14 @@ class Submission(Base):
 
 # --------------------------------------------------------------------------- projects
 class ProjectState(str, enum.Enum):
-    IDEA = "IDEA"; PROPOSED = "PROPOSED"; TEAM_FORMING = "TEAM_FORMING"; PLANNING = "PLANNING"
-    DEVELOPMENT = "DEVELOPMENT"; TESTING = "TESTING"; DEMO = "DEMO"; COMPLETED = "COMPLETED"
+    IDEA = "IDEA"
+    PROPOSED = "PROPOSED"
+    TEAM_FORMING = "TEAM_FORMING"
+    PLANNING = "PLANNING"
+    DEVELOPMENT = "DEVELOPMENT"
+    TESTING = "TESTING"
+    DEMO = "DEMO"
+    COMPLETED = "COMPLETED"
     SHOWCASE = "SHOWCASE"
 
 

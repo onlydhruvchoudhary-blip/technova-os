@@ -5,15 +5,15 @@ import time
 from collections import defaultdict, deque
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..database import get_db
-from ..models import Challenge, Submission, Skill, User, Role, AuditLog
-from ..schemas import SubmissionIn, ChallengeCreate
-from ..security import get_current_user, require_role
-from ..judge import judge
 from .. import engine
+from ..database import get_db
+from ..judge import judge
+from ..models import AuditLog, Challenge, Role, Skill, Submission, User
+from ..schemas import ChallengeCreate, SubmissionIn
+from ..security import get_current_user, require_role
 
 router = APIRouter(prefix="/api/challenges", tags=["challenges"])
 

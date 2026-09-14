@@ -13,3 +13,5 @@ qrcode[pil]
 psycopg2-binary
 httpx
 pytest
+alembic
+ruff==0.16.7

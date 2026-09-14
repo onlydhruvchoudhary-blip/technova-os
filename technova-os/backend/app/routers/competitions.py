@@ -5,11 +5,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..database import get_db
-from ..models import (Competition, CompetitionEntry, RubricScore, User, Role, AuditLog)
-from ..schemas import CompetitionCreate, EntryIn, ScoreIn
-from ..security import get_current_user, require_role, has_role
 from .. import engine
+from ..database import get_db
+from ..models import AuditLog, Competition, CompetitionEntry, Role, RubricScore, User
+from ..schemas import CompetitionCreate, EntryIn, ScoreIn
+from ..security import get_current_user, has_role, require_role
 
 router = APIRouter(prefix="/api/competitions", tags=["competitions"])
 

@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from .. import engine
 from ..database import get_db
 from ..models import Course, Lesson, LessonProgress, Skill, User
 from ..schemas import LessonComplete
 from ..security import get_current_user
-from .. import engine
 
 router = APIRouter(prefix="/api/academy", tags=["academy"])
 
@@ -51,14 +51,14 @@ def get_course(slug: str, user: User = Depends(get_current_user), db: Session = 
     ).scalars().all()}
     lessons = []
     prev_done = True  # first lesson always unlocked
-    for i, l in enumerate(c.lessons):
-        p = progress.get(l.id)
+    for i, lesson in enumerate(c.lessons):
+        p = progress.get(lesson.id)
         done = bool(p and p.completed)
         unlocked = i == 0 or prev_done  # progression gate
         lessons.append({
-            "id": l.id, "title": l.title, "order": l.order, "kind": l.kind,
-            "xp": l.xp, "completed": done, "score": p.score if p else 0,
-            "unlocked": unlocked, "has_quiz": bool(l.quiz),
+            "id": lesson.id, "title": lesson.title, "order": lesson.order, "kind": lesson.kind,
+            "xp": lesson.xp, "completed": done, "score": p.score if p else 0,
+            "unlocked": unlocked, "has_quiz": bool(lesson.quiz),
         })
         prev_done = done
     return {
@@ -71,12 +71,12 @@ def get_course(slug: str, user: User = Depends(get_current_user), db: Session = 
 
 @router.get("/lessons/{lesson_id}")
 def get_lesson(lesson_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    l = db.get(Lesson, lesson_id)
-    if not l:
+    lesson = db.get(Lesson, lesson_id)
+    if not lesson:
         raise HTTPException(status_code=404, detail="Lesson not found")
     # gate: previous lesson must be complete
-    siblings = l.course.lessons
-    idx = [s.id for s in siblings].index(l.id)
+    siblings = lesson.course.lessons
+    idx = [s.id for s in siblings].index(lesson.id)
     if idx > 0:
         prev = siblings[idx - 1]
         pp = db.execute(select(LessonProgress).where(
@@ -84,47 +84,47 @@ def get_lesson(lesson_id: int, user: User = Depends(get_current_user), db: Sessi
         if not (pp and pp.completed):
             raise HTTPException(status_code=403, detail="Complete the previous lesson first")
     p = db.execute(select(LessonProgress).where(
-        LessonProgress.user_id == user.id, LessonProgress.lesson_id == l.id)).scalar_one_or_none()
+        LessonProgress.user_id == user.id, LessonProgress.lesson_id == lesson.id)).scalar_one_or_none()
     quiz_public = None
-    if l.quiz:
+    if lesson.quiz:
         # never expose answer_index to the client
-        quiz_public = [{"q": item["q"], "options": item["options"]} for item in l.quiz.get("items", [])]
+        quiz_public = [{"q": item["q"], "options": item["options"]} for item in lesson.quiz.get("items", [])]
     return {
-        "id": l.id, "title": l.title, "kind": l.kind, "content": l.content,
-        "video_url": l.video_url, "xp": l.xp, "quiz": quiz_public,
-        "pass_score": l.pass_score, "course_slug": l.course.slug,
+        "id": lesson.id, "title": lesson.title, "kind": lesson.kind, "content": lesson.content,
+        "video_url": lesson.video_url, "xp": lesson.xp, "quiz": quiz_public,
+        "pass_score": lesson.pass_score, "course_slug": lesson.course.slug,
         "completed": bool(p and p.completed), "score": p.score if p else 0,
-        "skill_key": l.course.skill.key if l.course.skill else None,
+        "skill_key": lesson.course.skill.key if lesson.course.skill else None,
     }
 
 
 @router.post("/lessons/{lesson_id}/complete")
 def complete_lesson(lesson_id: int, data: LessonComplete,
                     user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    l = db.get(Lesson, lesson_id)
-    if not l:
+    lesson = db.get(Lesson, lesson_id)
+    if not lesson:
         raise HTTPException(status_code=404, detail="Lesson not found")
-    skill_key = l.course.skill.key if l.course.skill else None
+    skill_key = lesson.course.skill.key if lesson.course.skill else None
 
     score = 100
     passed = True
-    if l.quiz:
-        items = l.quiz.get("items", [])
+    if lesson.quiz:
+        items = lesson.quiz.get("items", [])
         answers = data.quiz_answers or []
         if len(answers) != len(items):
             raise HTTPException(status_code=400, detail="Answer every question")
         correct = sum(1 for i, item in enumerate(items) if answers[i] == item["answer_index"])
         score = round(100 * correct / len(items)) if items else 100
-        passed = score >= l.pass_score
+        passed = score >= lesson.pass_score
         if not passed:
             return {"passed": False, "score": score,
-                    "message": f"Scored {score}%. Need {l.pass_score}% to pass. Try again."}
+                    "message": f"Scored {score}%. Need {lesson.pass_score}% to pass. Try again."}
 
     p = db.execute(select(LessonProgress).where(
-        LessonProgress.user_id == user.id, LessonProgress.lesson_id == l.id)).scalar_one_or_none()
+        LessonProgress.user_id == user.id, LessonProgress.lesson_id == lesson.id)).scalar_one_or_none()
     already = bool(p and p.completed)
     if not p:
-        p = LessonProgress(user_id=user.id, lesson_id=l.id)
+        p = LessonProgress(user_id=user.id, lesson_id=lesson.id)
         db.add(p)
     p.completed = True
     p.score = score
@@ -135,22 +135,22 @@ def complete_lesson(lesson_id: int, data: LessonComplete,
     if not already:
         effects = engine.emit(db, engine.Event(
             "lesson.completed", user.id,
-            {"lesson_id": l.id, "title": l.title, "xp": l.xp, "skill_key": skill_key}))
-        if l.quiz and passed:
+            {"lesson_id": lesson.id, "title": lesson.title, "xp": lesson.xp, "skill_key": skill_key}))
+        if lesson.quiz and passed:
             engine.emit(db, engine.Event(
                 "quiz.passed", user.id,
-                {"lesson_id": l.id, "score": score, "skill_key": skill_key}))
+                {"lesson_id": lesson.id, "score": score, "skill_key": skill_key}))
 
         # course completion?
-        total = len(l.course.lessons)
+        total = len(lesson.course.lessons)
         done = db.execute(
             select(func.count(LessonProgress.id)).join(Lesson, Lesson.id == LessonProgress.lesson_id)
-            .where(Lesson.course_id == l.course_id, LessonProgress.user_id == user.id,
+            .where(Lesson.course_id == lesson.course_id, LessonProgress.user_id == user.id,
                    LessonProgress.completed == True)  # noqa
         ).scalar_one()
         if done >= total:
             engine.emit(db, engine.Event("course.completed", user.id,
-                                         {"course_id": l.course_id, "title": l.course.title}))
+                                         {"course_id": lesson.course_id, "title": lesson.course.title}))
     db.commit()
     return {"passed": True, "score": score, "already_completed": already, "effects": effects}
 

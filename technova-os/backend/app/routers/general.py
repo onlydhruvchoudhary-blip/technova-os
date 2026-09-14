@@ -2,16 +2,27 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, func, or_
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from ..database import get_db
-from ..models import (User, Notification, Resource, Announcement, Certificate, Role,
-                      Project, Event, Course, Challenge, PointsLedgerEntry, AuditLog)
-from ..schemas import AnnouncementIn
-from ..security import (get_current_user, get_optional_user, require_role, has_role,
-                        verify_certificate_sig)
 from .. import engine
+from ..database import get_db
+from ..models import (
+    Announcement,
+    AuditLog,
+    Certificate,
+    Challenge,
+    Course,
+    Event,
+    Notification,
+    PointsLedgerEntry,
+    Project,
+    Resource,
+    Role,
+    User,
+)
+from ..schemas import AnnouncementIn
+from ..security import get_current_user, get_optional_user, require_role, verify_certificate_sig
 
 router = APIRouter(prefix="/api", tags=["general"])
 
@@ -50,6 +61,56 @@ def mark_read(user: User = Depends(get_current_user), db: Session = Depends(get_
                                   Notification.read == False).update({"read": True})  # noqa
     db.commit()
     return {"ok": True}
+
+
+@router.get("/notifications/stream")
+async def notifications_stream(token: str, db: Session = Depends(get_db)):
+    """Server-Sent Events stream for near-instant notifications (replaces fixed polling).
+
+    An EventSource cannot send custom/Authorization headers, so the JWT is passed as ?token=.
+    The stream is bounded (self-recycles) so it never pins a worker indefinitely; the client
+    reconnects automatically. Each event carries the current unread count.
+    """
+    import asyncio
+    import json as _json
+
+    from ..database import SessionLocal
+    from ..security import user_from_token
+
+    user = user_from_token(token, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    user_id = user.id
+
+    async def event_gen():
+        last_seen = -1
+        # Cap the connection lifetime; the browser EventSource transparently reconnects.
+        for _ in range(120):  # ~2 minutes at 1s cadence
+            s = SessionLocal()
+            try:
+                unread = s.execute(
+                    select(func.count(Notification.id)).where(
+                        Notification.user_id == user_id, Notification.read == False)  # noqa
+                ).scalar_one()
+                latest = s.execute(
+                    select(Notification).where(Notification.user_id == user_id)
+                    .order_by(Notification.created_at.desc()).limit(1)
+                ).scalar_one_or_none()
+            finally:
+                s.close()
+            latest_id = latest.id if latest else 0
+            if latest_id != last_seen:
+                last_seen = latest_id
+                payload = {"unread": int(unread),
+                           "latest": ({"id": latest.id, "kind": latest.kind, "title": latest.title,
+                                       "body": latest.body, "link": latest.link} if latest else None)}
+                yield f"data: {_json.dumps(payload)}\n\n"
+            await asyncio.sleep(1)
+        yield "event: reconnect\ndata: {}\n\n"
+
+    from starlette.responses import StreamingResponse
+    return StreamingResponse(event_gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 # ---------------------------------------------------------------- resources

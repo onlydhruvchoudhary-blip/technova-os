@@ -48,8 +48,17 @@ docker compose exec api python -m app.seed
 Otherwise the **first user to register becomes SUPER_ADMIN**, then invites/promotes others.
 
 ## Migrations
-Schema is created via SQLAlchemy `create_all`. For evolving a live Postgres DB in production,
-add **Alembic** (`alembic init`, autogenerate revisions). The models are Alembic-ready.
+Schema is managed with **Alembic migrations** (`backend/migrations/`). On startup the app runs
+`alembic upgrade head` automatically; a pre-existing database created before migrations is
+transparently stamped at the baseline revision (no data loss), then upgraded. To evolve the schema:
+
+```bash
+cd backend
+alembic revision --autogenerate -m "describe change"   # generate a versioned migration
+alembic upgrade head                                    # apply it
+```
+
+If Alembic is unavailable for any reason, the app falls back to `create_all` so it still boots.
 
 ## Reverse proxy / TLS
 Put nginx or Caddy in front of the API for TLS termination and gzip. Example Caddy:

@@ -2,16 +2,16 @@
 from __future__ import annotations
 
 import re
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..database import get_db
-from ..models import (Project, ProjectMember, Task, Review, ProjectState, User, UserSkill,
-                      Skill, Role, AuditLog)
-from ..schemas import ProjectCreate, TaskCreate, TaskUpdate, ReviewIn
-from ..security import get_current_user, get_optional_user, has_role, require_role
 from .. import engine
+from ..database import get_db
+from ..models import AuditLog, Project, ProjectMember, ProjectState, Review, Role, Skill, Task, User, UserSkill
+from ..schemas import ProjectCreate, ReviewIn, TaskCreate, TaskUpdate
+from ..security import get_current_user, get_optional_user, has_role, require_role
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 

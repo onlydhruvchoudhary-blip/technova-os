@@ -7,13 +7,13 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
+from . import models  # noqa: F401  (register models)
 from .config import get_settings
 from .database import Base, engine
-from . import models  # noqa: F401  (register models)
-from .routers import auth, profile, academy, challenges, projects, events, competitions, general, admin
+from .routers import academy, admin, auth, challenges, competitions, events, general, profile, projects
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("technova")
@@ -21,9 +21,44 @@ logger = logging.getLogger("technova")
 settings = get_settings()
 
 
+def _init_schema() -> None:
+    """Bring the database schema up to date.
+
+    Prefers Alembic migrations (production-grade, versioned). Falls back to
+    create_all if Alembic isn't available. Handles the case of a pre-existing
+    database created before migrations by stamping it at the base revision.
+    """
+    from sqlalchemy import inspect
+    try:
+        from alembic import command
+        from alembic.config import Config
+        from alembic.runtime.migration import MigrationContext
+
+        cfg_path = os.path.join(os.path.dirname(__file__), "..", "alembic.ini")
+        if not os.path.exists(cfg_path):
+            raise FileNotFoundError("alembic.ini not found")
+        cfg = Config(cfg_path)
+        cfg.set_main_option("script_location",
+                            os.path.join(os.path.dirname(__file__), "..", "migrations"))
+
+        insp = inspect(engine)
+        tables = set(insp.get_table_names())
+        # An existing DB from before migrations: has app tables but no alembic_version.
+        if tables and "alembic_version" not in tables:
+            with engine.connect() as conn:
+                if MigrationContext.configure(conn).get_current_revision() is None:
+                    command.stamp(cfg, "head")  # adopt current schema as the baseline
+                    logger.info("Stamped existing database at head revision")
+        command.upgrade(cfg, "head")
+        logger.info("Database migrations applied")
+    except Exception as exc:  # pragma: no cover - fall back so the app still boots
+        logger.warning("Alembic unavailable (%s); using create_all fallback", exc)
+        Base.metadata.create_all(bind=engine)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.create_all(bind=engine)
+    _init_schema()
     # Seed demo data + login accounts on first boot (idempotent: no-op if already seeded).
     # Lets a fresh production database (e.g. Render Postgres) come up ready to use.
     try:
@@ -50,8 +85,29 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Observability + security hardening middleware.
+from .middleware import RequestContextMiddleware, SecurityHeadersMiddleware  # noqa: E402
+
+app.add_middleware(SecurityHeadersMiddleware, is_production=(settings.environment == "production"))
+app.add_middleware(RequestContextMiddleware)
+
 for r in (auth, profile, academy, challenges, projects, events, competitions, general, admin):
     app.include_router(r.router)
+
+
+# ---- Global error boundary: unhandled exceptions return clean JSON, never a stack trace.
+from fastapi import Request  # noqa: E402
+from fastapi.responses import JSONResponse  # noqa: E402
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    # Log the full trace server-side for debugging, but never leak internals to clients.
+    logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Something went wrong. Our team has been notified."},
+    )
 
 
 @app.get("/api/health")

@@ -11,10 +11,9 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..database import get_db
-from ..models import User, Role, AuditLog
+from ..models import AuditLog, Role, User
 from ..schemas import RegisterIn, TokenOut, UserOut
-from ..security import (hash_password, verify_password, create_access_token,
-                        get_current_user, COOKIE_NAME)
+from ..security import COOKIE_NAME, create_access_token, get_current_user, hash_password, verify_password
 
 _settings = get_settings()
 

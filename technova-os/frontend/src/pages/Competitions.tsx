@@ -30,7 +30,7 @@ export default function Competitions() {
       {comps.length === 0 ? <Empty icon="🥇" title="No competitions yet" /> : (
         <div className="grid g2">
           {comps.map(c => (
-            <Link to={`/competitions/${c.id}`} key={c.id} className="card" style={{ display: 'block' }}>
+            <Link to={`/competitions/${c.id}`} key={c.id} className="card card-hover" style={{ display: 'block' }}>
               <div className="row between" style={{ marginBottom: 8 }}>
                 <span className="badge a">{c.kind}</span>
                 <span className={`badge ${c.status === 'open' ? 'g' : c.status === 'judging' ? 'w' : ''}`}>{c.status}</span>

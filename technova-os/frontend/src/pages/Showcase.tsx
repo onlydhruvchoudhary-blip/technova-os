@@ -14,7 +14,7 @@ export default function Showcase() {
       {projects.length === 0 ? <Empty icon="✨" title="No showcased projects yet" sub="Complete a project and move it to SHOWCASE." /> : (
         <div className="grid g2">
           {projects.map(p => (
-            <div key={p.slug} className="card">
+            <div key={p.slug} className="card card-hover">
               <div className="row between" style={{ marginBottom: 8 }}>
                 <span className="badge g">{p.state}</span>
                 <span className="faint" style={{ fontSize: 12 }}>👥 {p.member_count} builders</span>
