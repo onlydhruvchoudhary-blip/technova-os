@@ -5,7 +5,8 @@ services:
   - type: web
     name: technova-os
     runtime: docker
-    dockerfilePath: ./Dockerfile
+    dockerfilePath: ./technova-os/Dockerfile
+    dockerContext: ./technova-os
     plan: free
     healthCheckPath: /api/health
     envVars:
