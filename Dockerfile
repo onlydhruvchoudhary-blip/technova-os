@@ -24,6 +24,9 @@ COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend/app ./app
+# Alembic migrations + config (schema is migration-managed).
+COPY backend/migrations ./migrations
+COPY backend/alembic.ini ./alembic.ini
 # Bake the freshly built SPA into the location the API serves from.
 COPY --from=frontend /web/dist ./frontend_dist
 

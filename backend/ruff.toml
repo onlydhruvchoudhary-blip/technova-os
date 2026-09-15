@@ -1,0 +1,18 @@
+# Ruff configuration for TECHNOVA OS backend.
+line-length = 120
+target-version = "py313"
+
+[lint]
+# Sensible, non-pedantic rule set: pyflakes (F), pycodestyle errors (E),
+# import sorting (I), bugbear (B), pyupgrade (UP), comprehensions (C4).
+select = ["F", "E", "I", "B", "UP", "C4"]
+ignore = [
+    "E501",  # line length handled by formatter/line-length above; don't fail hard
+    "B008",  # FastAPI uses `Depends()` as default args by design
+    "C408",  # dict(...) literals used intentionally for readable seed records
+    "UP042", # str+Enum is intentional for stable JSON serialization across the app
+]
+
+[lint.per-file-ignores]
+"migrations/*" = ["F401", "E402"]
+"tests/*" = ["F401", "E402"]
