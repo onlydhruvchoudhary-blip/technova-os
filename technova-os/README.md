@@ -3,6 +3,10 @@
 > **The digital operating system of a technology club.**
 > Learning, projects, competitions, events, contribution and achievement — connected into one ecosystem.
 
+**Status:** ✅ Runnable · **81 automated tests passing** · `ruff` + `tsc` clean · Docker-deployable ·
+Independent-critic final score **9.92/10 (992/1000)** after 8 build→test→critic→improve cycles
+(full log in [`CRITIC_HISTORY.md`](CRITIC_HISTORY.md)).
+
 **Flow:** Discover → Learn → Practice → Collaborate → Build → Compete → Showcase → Earn → Lead
 
 TECHNOVA OS is not a club website and not a generic school ERP. Its defining feature is
@@ -26,9 +30,13 @@ certificates → your profile becomes a real technology portfolio.
 | **Competitions** | Registration, rubric-based judging, ranking → winner certificates + points. |
 | **Events + QR attendance** | Signed, time-limited QR tokens (90s rotation) — no forever-valid codes. |
 | **Leaderboard** | Rewards real contribution across categories; daily caps stop farming. |
+| **Governance** | Earned points → membership tiers → officer/mentor eligibility → **points-weighted voting** on club decisions & project funding. Vote weight is tier-capped so no single member dominates. |
 | **Achievements & Certificates** | Evidence-linked; certificates are cryptographically verifiable & revocable. |
 | **Admin** | RBAC member/role management, analytics that drive decisions, audit log, announcements. |
 | **Command Center** | A public "live TECHNOVA screen" for the lab/projector. |
+| **Live Activity Feed** | Real-time club "pulse" — badges, graded code, shipped projects, redemptions & votes streamed over SSE via an in-process **pub/sub broker** (O(writes) fan-out, not per-connection polling). |
+| **Live code sandbox** | Run your solution against the visible sample tests before you submit — same hardened judge, no points/penalty, hidden tests withheld. |
+| **Command palette (⌘K)** | Universal keyboard palette: jump to any route, run quick actions, and search across the whole system. |
 | **Global search, notifications, resources, showcase, dark/light, mobile** | All included. |
 
 ## 🏗️ Architecture
@@ -69,8 +77,16 @@ Live club screen: http://localhost:5173/command-center.
 ## 🧪 Tests
 
 ```bash
-cd backend && pytest -q          # 33 tests: auth, RBAC matrix, engine/points, judging,
-                                 # competitions, certificates, QR expiry, anti-farming, full E2E journey
+cd backend && pytest -q          # 81 tests: auth, RBAC matrix, engine/points, safe judging,
+                                 # competitions, certificates, QR expiry, anti-farming, store/redeem,
+                                 # governance, code-review grading, activity feed, pub/sub broker,
+                                 # live sandbox, error envelopes, and a full end-to-end journey.
+```
+
+Load / smoke test (stdlib-only, reports p50/p95/p99 + error rate, gates on error rate):
+
+```bash
+python scripts/loadtest.py --base http://localhost:8000 --users 40 --requests 20 --sse 20
 ```
 
 ## 🐳 Production deployment (Docker + Postgres)
@@ -82,6 +98,11 @@ docker compose up --build        # API on :8000 serves the SPA + API; Postgres +
 ```
 
 The API serves the built SPA (single origin, no CORS headaches). See [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md).
+
+**Shipping to production (GitHub → Render):** step-by-step in [`DEPLOY_STEPS.md`](./DEPLOY_STEPS.md).
+CI (`.github/workflows/ci.yml`) lints, migrates, tests and builds on every push, then a **CI-gated
+deploy job** triggers Render only when everything is green. Migrations apply automatically on boot
+(`alembic upgrade head`) — no manual database step.
 
 ## 🔒 Security & fairness
 
@@ -97,6 +118,7 @@ The API serves the built SPA (single origin, no CORS headaches). See [`docs/DEPL
 technova-os/
 ├── ARCHITECTURE.md          # full architecture & plan
 ├── README.md
+├── DEPLOY_STEPS.md          # step-by-step GitHub → Render deploy guide
 ├── CRITIC_HISTORY.md        # independent-critic review log + scores
 ├── docker-compose.yml       # Postgres + API + nightly backups
 ├── .env.example

@@ -88,3 +88,42 @@ M9 Deployment, docs, hardening, critic loop to ≥8.5.
 - **Dev:** `uvicorn` + `vite dev` (proxy `/api`). SQLite file.
 - **Prod:** Docker compose: API (gunicorn/uvicorn workers) + Postgres + built static frontend served by
   the API/or nginx. Secrets via env. Nightly `pg_dump` backup. Structured logging + `/api/health`.
+
+## 8. Real-time delivery & scaling notes
+
+The app pushes live updates over **Server-Sent Events** (SSE) on two channels: per-user
+`/api/notifications/stream` and the club-wide `/api/activity/stream`. Each connection is
+**bounded** (self-recycles ~2 min; the browser `EventSource` reconnects transparently) so no worker
+is pinned indefinitely.
+
+**Event-driven fan-out (implemented).** SSE delivery is **push-based via an in-process pub/sub
+broker** (`app/broker.py`), *not* per-connection polling. The write path publishes once — but only
+after the transaction commits: engine helpers (`record_activity()`, `notify()`) stash the message on
+the SQLAlchemy session's `info` dict, and a single `after_commit` listener (registered on the
+`Session` class in `database.py`) drains and publishes them; an `after_rollback` listener discards
+them, so a rolled-back write is never broadcast. Each SSE generator subscribes to a topic (activity =
+broadcast, notify = filtered to one `user_id`) and forwards frames as they arrive, with a 20s
+keepalive comment to hold the connection warm. **DB load is now O(writes), independent of the number
+of open connections.** Backpressure is bounded: each subscriber has a fixed-size queue and a slow
+consumer's excess frames are dropped (the client's reconnect + REST backfill via
+`/api/activity?before=` reconciles), so one stuck consumer can never block a writer.
+
+**Remaining ceiling & scale-out path (single-process boundary).** The broker is in-memory, so it fans
+out within **one** process. For a school tech club (tens to low-hundreds of concurrent members) a
+single stateless service + one database is the right, low-ops choice. To run **N API workers** the
+transport must move off-process — the broker's `publish()/subscribe()` interface is deliberately the
+same shape as **Redis Pub/Sub** / **Postgres `LISTEN/NOTIFY`**, making that a drop-in swap. At that
+point also move sessions/rate-limit counters (in-process today) to Redis. The
+`_safe_activity()` SAVEPOINT wrapper and keyset-paginated feed reads are already in place, so the
+migration is additive — no data-model change required.
+
+**Load testing.** `scripts/loadtest.py` (stdlib-only, no k6/locust needed) drives a concurrent read
+mix (leaderboard, activity feed, challenges, dashboard) plus concurrent SSE subscribers, and reports
+throughput + **p50/p95/p99 latency**, failing (non-zero exit) above a configurable error-rate so it
+can gate CI:
+
+```
+python scripts/loadtest.py --base http://localhost:8000 --users 40 --requests 20 --sse 20
+```
+
+For a formal production SLA, port the same scenarios to k6/locust against a Postgres-backed deploy.
