@@ -16,7 +16,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -24,6 +24,7 @@ from .config import get_settings
 from .models import (
     SKILL_TIERS,
     Achievement,
+    ActivityEvent,
     Certificate,
     Notification,
     PointsLedgerEntry,
@@ -121,21 +122,79 @@ def award_points(db: Session, user_id: int, points: int, category: str,
 
 
 def total_points(db: Session, user_id: int) -> int:
+    """Spendable WALLET balance: sum of every ledger entry, including negative redemptions."""
     return int(db.execute(
         select(func.coalesce(func.sum(PointsLedgerEntry.points), 0))
         .where(PointsLedgerEntry.user_id == user_id)
     ).scalar_one() or 0)
 
 
+def lifetime_points(db: Session, user_id: int) -> int:
+    """All-time CONTRIBUTION score: excludes store spending/refunds so buying rewards never lowers
+    your leaderboard rank or governance tier. This is the number that reflects real work done."""
+    return int(db.execute(
+        select(func.coalesce(func.sum(PointsLedgerEntry.points), 0))
+        .where(PointsLedgerEntry.user_id == user_id)
+        .where(PointsLedgerEntry.category != "redemption")
+    ).scalar_one() or 0)
+
+
+def spend_points(db: Session, user_id: int, cost: int, source_type: str,
+                 source_id: str, reason: str) -> dict:
+    """Debit points via a NEGATIVE ledger entry. Idempotent + balance-checked, server-side only.
+
+    Returns {ok, dedupe_key, balance} or {ok: False, error}. Because the wallet is the *sum* of the
+    append-only ledger, a spend is just a negative row — there is no mutable balance to tamper with,
+    and the same dedupe_key guards against double-spend from a retried request.
+    """
+    if cost <= 0:
+        return {"ok": False, "error": "Invalid cost"}
+    balance = total_points(db, user_id)
+    if balance < cost:
+        return {"ok": False, "error": f"Insufficient points: need {cost}, have {balance}"}
+    dedupe = f"{user_id}:{source_type}:{source_id}"
+    if db.execute(select(PointsLedgerEntry.id).where(
+            PointsLedgerEntry.dedupe_key == dedupe)).first():
+        return {"ok": False, "error": "Duplicate redemption"}
+    entry = PointsLedgerEntry(
+        user_id=user_id, points=-abs(cost), category="redemption",
+        source_type=source_type, source_id=str(source_id), reason=reason, dedupe_key=dedupe,
+    )
+    db.add(entry)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        return {"ok": False, "error": "Duplicate redemption"}
+    return {"ok": True, "dedupe_key": dedupe, "balance": balance - cost}
+
+
+def refund_points(db: Session, user_id: int, amount: int, source_id: str, reason: str) -> None:
+    """Reverse a spend with a positive ledger entry (used when an admin cancels a redemption)."""
+    entry = PointsLedgerEntry(
+        user_id=user_id, points=abs(amount), category="redemption",
+        source_type="refund", source_id=str(source_id), reason=reason,
+        dedupe_key=f"{user_id}:refund:{source_id}",
+    )
+    db.add(entry)
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+
+
 def leaderboard(db: Session, limit: int = 100) -> list[dict]:
+    # Rank on CONTRIBUTION (exclude store redemptions) so spending points never drops your rank.
+    contrib = func.coalesce(func.sum(
+        case((PointsLedgerEntry.category == "redemption", 0), else_=PointsLedgerEntry.points)
+    ), 0)
     rows = db.execute(
-        select(User.id, User.name, User.role, User.avatar_seed,
-               func.coalesce(func.sum(PointsLedgerEntry.points), 0).label("pts"))
+        select(User.id, User.name, User.role, User.avatar_seed, contrib.label("pts"))
         .join(PointsLedgerEntry, PointsLedgerEntry.user_id == User.id, isouter=True)
         .where(User.is_active == True)  # noqa: E712
         .where(User.hidden_from_leaderboard == False)  # noqa: E712
         .group_by(User.id)
-        .order_by(func.coalesce(func.sum(PointsLedgerEntry.points), 0).desc(), User.name.asc())
+        .order_by(contrib.desc(), User.name.asc())
         .limit(limit)
     ).all()
     out = []
@@ -185,6 +244,8 @@ def add_skill_xp(db: Session, user_id: int, skill_key: str, xp: int, evidence: s
         notify(db, user_id, "skill",
                f"Skill up: {skill.name} → {SKILL_TIERS[after]}",
                f"You reached {SKILL_TIERS[after]} in {skill.name}.", "/skills")
+        _safe_activity(db, kind="skill", actor_id=user_id, icon="🌱",
+                       text=f"reached {SKILL_TIERS[after]} in {skill.name}", link="/skills")
         # tier-up may unlock an achievement
         emit(db, Event("skill.tier_up", user_id,
                        {"skill_key": skill_key, "tier": SKILL_TIERS[after], "tier_index": after}))
@@ -193,8 +254,64 @@ def add_skill_xp(db: Session, user_id: int, skill_key: str, xp: int, evidence: s
 
 # --------------------------------------------------------------------------- notifications
 def notify(db: Session, user_id: int, kind: str, title: str, body: str = "", link: str = "") -> None:
-    db.add(Notification(user_id=user_id, kind=kind, title=title, body=body, link=link))
+    n = Notification(user_id=user_id, kind=kind, title=title, body=body, link=link)
+    db.add(n)
     db.flush()
+    # Real-time nudge to just this user's SSE stream (after commit only).
+    _publish_after_commit(db, "notify", {"user_id": user_id, "kind": kind, "title": title,
+                                         "body": body, "link": link}, target=user_id)
+
+
+# --------------------------------------------------------------------------- activity feed
+def _publish_after_commit(db: Session, topic: str, data: dict, target: int | None = None) -> None:
+    """Queue a broker publish to fire only if/when this session's transaction commits.
+
+    Pending messages are stashed on the session's ``info`` dict; a single module-level
+    ``after_commit`` listener (registered once on the Session class, see below) drains and publishes
+    them, and an ``after_rollback`` listener discards them. This is the correct SQLAlchemy pattern —
+    registering a fresh listener per call leaks handlers and fires them in a committed state.
+    """
+    db.info.setdefault("_pending_publishes", []).append((topic, data, target))
+
+
+def record_activity(db: Session, kind: str, text: str, *, actor_id: int | None = None,
+                    icon: str = "✨", link: str = "", points: int = 0) -> None:
+    """Append one entry to the club-wide public activity pulse.
+
+    Best-effort and non-fatal: the actor name is denormalised for cheap reads, and any failure
+    here must never break the primary action that triggered it (see the try/except at call sites
+    via _safe_activity). Only celebratory, non-sensitive events belong here.
+    """
+    actor_name = ""
+    if actor_id is not None:
+        u = db.get(User, actor_id)
+        if u:
+            actor_name = u.name or u.email.split("@")[0]
+    ev = ActivityEvent(kind=kind, actor_id=actor_id, actor_name=actor_name,
+                       icon=icon, text=text, link=link, points=points)
+    db.add(ev)
+    db.flush()
+    # Fan out to live SSE subscribers via the in-process pub/sub broker (O(writes), not per-client
+    # polling). Best-effort: registered as an after-commit hook so we never push an event that a
+    # later rollback would erase; the client's REST backfill reconciles any dropped frame.
+    payload = {"id": ev.id, "kind": ev.kind, "icon": ev.icon, "actor": ev.actor_name,
+               "text": ev.text, "link": ev.link, "points": ev.points,
+               "created_at": (ev.created_at.isoformat() if ev.created_at
+                              else dt.datetime.now(dt.UTC).isoformat())}
+    _publish_after_commit(db, "activity", payload)
+
+
+def _safe_activity(db: Session, **kwargs) -> None:
+    """record_activity that never breaks a real workflow.
+
+    Wrapped in a SAVEPOINT so that if the insert fails (e.g. a bad FK), only the nested
+    transaction is rolled back — the caller's outer transaction stays usable and commits.
+    """
+    try:
+        with db.begin_nested():
+            record_activity(db, **kwargs)
+    except Exception:  # noqa: BLE001  feed is purely cosmetic
+        pass
 
 
 # --------------------------------------------------------------------------- achievements
@@ -214,6 +331,9 @@ def grant_achievement(db: Session, user_id: int, key: str, evidence: str = "") -
         award_points(db, user_id, ach.points, "social", "achievement", key,
                      f"Achievement: {ach.name}")
     notify(db, user_id, "achievement", f"Achievement unlocked: {ach.name}", ach.description, "/profile")
+    _safe_activity(db, kind="achievement", actor_id=user_id, icon=ach.icon or "🏅",
+                   text=f"unlocked the “{ach.name}” achievement", link="/showcase",
+                   points=ach.points or 0)
     return {"achievement": key, "name": ach.name}
 
 
@@ -236,6 +356,8 @@ def issue_certificate(db: Session, user_id: int, kind: str, title: str,
     db.flush()
     notify(db, user_id, "certificate", f"Certificate issued: {title}",
            f"Verify with ID {cert_uid}", f"/verify/{cert_uid}")
+    _safe_activity(db, kind="certificate", actor_id=user_id, icon="📜",
+                   text=f"earned the “{title}” certificate", link=f"/verify/{cert_uid}")
     return cert
 
 
@@ -322,6 +444,9 @@ def _r_project_join(db: Session, e: Event):
 def _r_project_done(db: Session, e: Event):
     effects = []
     pid = e.payload["project_id"]
+    _safe_activity(db, kind="project", actor_id=e.user_id, icon="🚀",
+                   text=f"shipped the project “{e.payload.get('title', 'a project')}”",
+                   link="/showcase")
     for member_id in e.payload.get("member_ids", [e.user_id]):
         award_points(db, member_id, 150, "project", "project_complete", pid,
                      f"Completed project: {e.payload.get('title', '')}")

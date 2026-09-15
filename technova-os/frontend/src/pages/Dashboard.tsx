@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { api } from '../api'
 import { useAuth } from '../store'
 import { Spinner, Bar, StateBadge, DiffBadge } from '../ui'
+import ActivityFeed from '../ActivityFeed'
 
 export default function Dashboard() {
   const { user } = useAuth()
@@ -104,6 +105,8 @@ export default function Dashboard() {
               </div>
             ))}
           </div>
+
+          <ActivityFeed compact limit={6} />
         </div>
       </div>
     </div>

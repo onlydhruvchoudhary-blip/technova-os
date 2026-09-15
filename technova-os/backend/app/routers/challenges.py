@@ -80,6 +80,31 @@ def get_challenge(slug: str, user: User = Depends(get_current_user), db: Session
     }
 
 
+@router.post("/{slug}/run")
+def run_sandbox(slug: str, data: SubmissionIn,
+                user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Live sandbox: run code against the VISIBLE sample tests only.
+
+    No hidden tests, no persistence, no points — this is a safe "try it" that lets a member
+    iterate before spending a real submission. Uses the same sandboxed judge (subprocess, -I,
+    static check, time limit) and is throttled to prevent it becoming a free CPU tap.
+    """
+    _throttle(user.id)
+    c = db.execute(select(Challenge).where(Challenge.slug == slug)).scalar_one_or_none()
+    if not c:
+        raise HTTPException(status_code=404, detail="Challenge not found")
+    # hidden_tests=[] → judge only runs/returns the sample cases; hidden answers never exposed.
+    result = judge(data.code, c.function_name, c.sample_tests, [])
+    return {
+        "passed": result["passed"],
+        "tests_passed": result["tests_passed"],
+        "tests_total": result["tests_total"],
+        "feedback": result["feedback"],
+        "sample_results": result["sample_results"],
+        "sandbox": True,
+    }
+
+
 @router.post("/{slug}/submit")
 def submit(slug: str, data: SubmissionIn,
            user: User = Depends(get_current_user), db: Session = Depends(get_db)):

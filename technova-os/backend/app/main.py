@@ -13,7 +13,20 @@ from fastapi.staticfiles import StaticFiles
 from . import models  # noqa: F401  (register models)
 from .config import get_settings
 from .database import Base, engine
-from .routers import academy, admin, auth, challenges, competitions, events, general, profile, projects
+from .routers import (
+    academy,
+    admin,
+    auth,
+    challenges,
+    competitions,
+    events,
+    general,
+    governance,
+    grading,
+    profile,
+    projects,
+    store,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("technova")
@@ -59,6 +72,12 @@ def _init_schema() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _init_schema()
+    # Bind the running event loop to the pub/sub broker so sync write paths (in the threadpool)
+    # can fan out real-time messages to SSE subscribers on the loop.
+    import asyncio
+
+    from .broker import broker
+    broker.bind_loop(asyncio.get_running_loop())
     # Seed demo data + login accounts on first boot (idempotent: no-op if already seeded).
     # Lets a fresh production database (e.g. Render Postgres) come up ready to use.
     try:
@@ -91,12 +110,13 @@ from .middleware import RequestContextMiddleware, SecurityHeadersMiddleware  # n
 app.add_middleware(SecurityHeadersMiddleware, is_production=(settings.environment == "production"))
 app.add_middleware(RequestContextMiddleware)
 
-for r in (auth, profile, academy, challenges, projects, events, competitions, general, admin):
+for r in (auth, profile, academy, challenges, projects, events, competitions, general, governance, store, grading, admin):
     app.include_router(r.router)
 
 
 # ---- Global error boundary: unhandled exceptions return clean JSON, never a stack trace.
 from fastapi import Request  # noqa: E402
+from fastapi.exceptions import RequestValidationError  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
 
 
@@ -106,7 +126,23 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     logger.exception("Unhandled error on %s %s", request.method, request.url.path)
     return JSONResponse(
         status_code=500,
-        content={"detail": "Something went wrong. Our team has been notified."},
+        content={"detail": "Something went wrong. Our team has been notified.",
+                 "request_id": getattr(request.state, "request_id", None)},
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    # Consistent, human-readable 422 envelope instead of FastAPI's raw error array.
+    errors = exc.errors()
+    first = errors[0] if errors else {}
+    loc = ".".join(str(p) for p in first.get("loc", []) if p != "body")
+    msg = first.get("msg", "Invalid request")
+    detail = f"{loc}: {msg}" if loc else msg
+    return JSONResponse(
+        status_code=422,
+        content={"detail": detail, "errors": errors,
+                 "request_id": getattr(request.state, "request_id", None)},
     )
 
 

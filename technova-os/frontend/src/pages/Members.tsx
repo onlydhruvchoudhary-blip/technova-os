@@ -6,7 +6,11 @@ import { Spinner, Avatar, RoleBadge } from '../ui'
 export default function Members() {
   const [members, setMembers] = useState<any[]>([])
   const [q, setQ] = useState('')
-  useEffect(() => { api.get('/members').then(setMembers) }, [])
+  useEffect(() => {
+    const ac = new AbortController()
+    api.get('/members', ac.signal).then(setMembers).catch(() => {})
+    return () => ac.abort()
+  }, [])
   if (!members) return <Spinner />
   const shown = members.filter(m => m.name.toLowerCase().includes(q.toLowerCase()))
 

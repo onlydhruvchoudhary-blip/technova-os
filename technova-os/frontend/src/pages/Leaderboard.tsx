@@ -10,7 +10,11 @@ const CAT_COLORS: Record<string, string> = {
 
 export default function Leaderboard() {
   const [data, setData] = useState<any>(null)
-  useEffect(() => { api.get('/leaderboard').then(setData) }, [])
+  useEffect(() => {
+    const ac = new AbortController()
+    api.get('/leaderboard', ac.signal).then(setData).catch(() => {})
+    return () => ac.abort()
+  }, [])
   if (!data) return <Spinner />
   const breakdown = data.me.breakdown || {}
   const totalMine = Object.values(breakdown).reduce((a: number, b: any) => a + b, 0) as number

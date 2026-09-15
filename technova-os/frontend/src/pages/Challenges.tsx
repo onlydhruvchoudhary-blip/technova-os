@@ -6,7 +6,11 @@ import { Spinner, DiffBadge, Empty } from '../ui'
 export default function Challenges() {
   const [challenges, setChallenges] = useState<any[]>([])
   const [tab, setTab] = useState<'all' | 'weekly'>('all')
-  useEffect(() => { api.get('/challenges').then(setChallenges) }, [])
+  useEffect(() => {
+    const ac = new AbortController()
+    api.get('/challenges', ac.signal).then(setChallenges).catch(() => {})
+    return () => ac.abort()
+  }, [])
   if (!challenges) return <Spinner />
 
   const weekly = challenges.filter(c => c.is_weekly)

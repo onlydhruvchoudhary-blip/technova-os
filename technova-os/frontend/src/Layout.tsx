@@ -3,6 +3,8 @@ import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth, useTheme } from './store'
 import { api, getToken } from './api'
 import { Avatar, RoleBadge } from './ui'
+import CommandPalette from './CommandPalette'
+import Breadcrumbs from './Breadcrumbs'
 
 const NAV = [
   { section: 'Overview' },
@@ -13,13 +15,17 @@ const NAV = [
   { to: '/academy', icon: '📚', label: 'Academy' },
   { to: '/skills', icon: '🌳', label: 'Skill Tree' },
   { to: '/challenges', icon: '⚡', label: 'Challenges' },
+  { to: '/grading', icon: '🎓', label: 'Code Review' },
   { section: 'Build & Compete' },
   { to: '/projects', icon: '🛠️', label: 'Projects' },
   { to: '/competitions', icon: '🥇', label: 'Competitions' },
   { to: '/events', icon: '📅', label: 'Events' },
   { section: 'Club' },
   { to: '/members', icon: '👥', label: 'Members' },
+  { to: '/governance', icon: '🗳️', label: 'Governance' },
+  { to: '/store', icon: '🎁', label: 'Rewards Store' },
   { to: '/showcase', icon: '✨', label: 'Showcase' },
+  { to: '/activity', icon: '📡', label: 'Live Activity' },
   { to: '/resources', icon: '📖', label: 'Resources' },
 ]
 const ADMIN_ROLES = ['COMMITTEE', 'MENTOR', 'ADVISOR', 'CLUB_HEAD', 'SUPER_ADMIN']
@@ -40,19 +46,14 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const [unread, setUnread] = useState(0)
   const [notifOpen, setNotifOpen] = useState(false)
   const [notifs, setNotifs] = useState<any[]>([])
-  const [q, setQ] = useState('')
-  const [results, setResults] = useState<any[]>([])
-  const [activeIdx, setActiveIdx] = useState(0)
-  const searchRef = React.useRef<HTMLInputElement>(null)
-  const isAdmin = user && ADMIN_ROLES.includes(user.role)
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const isAdmin = !!user && ADMIN_ROLES.includes(user.role)
 
-  // ⌘K / Ctrl+K focuses global search; Esc clears it.
+  // ⌘K / Ctrl+K opens the universal command palette.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault(); searchRef.current?.focus()
-      } else if (e.key === 'Escape') {
-        setResults([]); setQ(''); searchRef.current?.blur()
+        e.preventDefault(); setPaletteOpen(o => !o)
       }
     }
     window.addEventListener('keydown', onKey)
@@ -87,15 +88,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     } catch { startPolling() }
     return () => { es?.close(); if (poll) clearInterval(poll) }
   }, [])
-  useEffect(() => { setNotifOpen(false); setResults([]); setQ('') }, [loc.pathname])
-
-  useEffect(() => {
-    if (q.length < 2) { setResults([]); return }
-    const t = setTimeout(async () => {
-      try { const d = await api.get(`/search?q=${encodeURIComponent(q)}`); setResults(d.results) } catch {}
-    }, 220)
-    return () => clearTimeout(t)
-  }, [q])
+  useEffect(() => { setNotifOpen(false); setPaletteOpen(false) }, [loc.pathname])
 
   const openNotifs = async () => {
     setNotifOpen(o => !o)
@@ -139,31 +132,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
       <div className="main">
         <div className="topbar">
-          <div style={{ position: 'relative', flex: 1, maxWidth: 420 }}>
-            <input ref={searchRef} className="input" placeholder="Search projects, courses, members…   ⌘K"
-              value={q} onChange={e => { setQ(e.target.value); setActiveIdx(0) }}
-              onKeyDown={e => {
-                if (!results.length) return
-                if (e.key === 'ArrowDown') { e.preventDefault(); setActiveIdx(i => Math.min(i + 1, results.length - 1)) }
-                else if (e.key === 'ArrowUp') { e.preventDefault(); setActiveIdx(i => Math.max(i - 1, 0)) }
-                else if (e.key === 'Enter') {
-                  const r = results[activeIdx]; if (!r) return
-                  r.link.startsWith('http') ? window.open(r.link) : nav(r.link); setResults([]); setQ('')
-                }
-              }}
-              style={{ padding: '8px 12px' }} />
-            {results.length > 0 && (
-              <div className="card" style={{ position: 'absolute', top: 44, left: 0, right: 0, zIndex: 40, padding: 6 }}>
-                {results.map((r, i) => (
-                  <div key={i} className={`nav-item${i === activeIdx ? ' active' : ''}`} style={{ margin: 0 }}
-                    onMouseEnter={() => setActiveIdx(i)}
-                    onClick={() => { r.link.startsWith('http') ? window.open(r.link) : nav(r.link); setResults([]); setQ('') }}>
-                    <span className="badge" style={{ marginRight: 6 }}>{r.type}</span>{r.title}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          <button className="cmdk-trigger" onClick={() => setPaletteOpen(true)}>
+            <span>🔎 Search or jump to…</span>
+            <kbd className="cmdk-kbd">⌘K</kbd>
+          </button>
           <div className="spacer" />
           <button className="btn ghost sm" onClick={toggle} title="Toggle theme">{theme === 'dark' ? '☀️' : '🌙'}</button>
           <div style={{ position: 'relative' }}>
@@ -186,8 +158,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </div>
           <button className="btn ghost sm" onClick={() => { logout(); nav('/') }}>Sign out</button>
         </div>
-        <div className="content">{children}</div>
+        <div className="content"><Breadcrumbs />{children}</div>
       </div>
+
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)}
+        isAdmin={isAdmin} onToggleTheme={toggle} />
 
       <nav className="mobile-nav">
         {[...MOBILE, ...(isAdmin ? [MOBILE_ADMIN] : [])].map(m => (

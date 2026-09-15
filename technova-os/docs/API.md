@@ -53,6 +53,8 @@ Interactive docs (OpenAPI/Swagger) are auto-generated at **`/docs`** when the AP
 | GET | `/leaderboard` | member | Board + your category breakdown. |
 | GET/POST | `/notifications` · `/notifications/read` | member | |
 | GET | `/search?q=` | member | Cross-entity global search. |
+| GET | `/activity?limit=&before=` | member | Club-wide activity pulse; keyset pagination via `before`. |
+| GET | `/activity/stream?token=` | member | SSE live stream of new activity events (token via query param). |
 | GET | `/resources` | member | Filter by technology/difficulty/query. |
 | GET/POST | `/announcements` | member / committee+ | Posting notifies all members. |
 

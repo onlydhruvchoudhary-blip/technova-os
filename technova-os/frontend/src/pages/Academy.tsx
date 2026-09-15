@@ -6,7 +6,11 @@ import { Spinner, Bar, Empty } from '../ui'
 export default function Academy() {
   const [courses, setCourses] = useState<any[]>([])
   const [cat, setCat] = useState('All')
-  useEffect(() => { api.get('/academy/courses').then(setCourses) }, [])
+  useEffect(() => {
+    const ac = new AbortController()
+    api.get('/academy/courses', ac.signal).then(setCourses).catch(() => {})
+    return () => ac.abort()
+  }, [])
   if (!courses) return <Spinner />
 
   const cats = ['All', ...Array.from(new Set(courses.map(c => c.category)))]

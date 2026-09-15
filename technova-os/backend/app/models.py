@@ -438,3 +438,136 @@ class AuditLog(Base):
     target: Mapped[str] = mapped_column(String(120), default="")
     detail: Mapped[str] = mapped_column(String(400), default="")
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# --------------------------------------------------------------------------- activity feed
+# A public, club-wide stream of noteworthy events (badges earned, code graded, rewards redeemed,
+# projects shipped, votes cast). Distinct from AuditLog (private/admin, security-oriented) and
+# Notification (per-user, private): ActivityEvent is the social "pulse" of the club, readable by
+# any member and streamed live over SSE. Only celebratory, non-sensitive events are recorded here.
+class ActivityEvent(Base):
+    __tablename__ = "activity_events"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(40), index=True)   # e.g. achievement, grading, redeem
+    actor_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    actor_name: Mapped[str] = mapped_column(String(120), default="")  # denormalised for cheap reads
+    icon: Mapped[str] = mapped_column(String(8), default="✨")
+    text: Mapped[str] = mapped_column(String(240), default="")   # human-readable one-liner
+    link: Mapped[str] = mapped_column(String(160), default="")
+    points: Mapped[int] = mapped_column(default=0)               # optional points delta to show
+    created_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True)
+
+
+# --------------------------------------------------------------------------- governance
+# Proposals let contributing members vote on club decisions and project funding.
+# Voting power is points-weighted (see app/governance.py) so real contribution earns real say,
+# but the weight is capped by membership tier so a single big earner can't dominate.
+class Proposal(Base):
+    __tablename__ = "proposals"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str] = mapped_column(Text, default="")
+    kind: Mapped[str] = mapped_column(String(20), default="decision", index=True)  # decision | funding
+    # For funding proposals: the amount requested and the project it funds (optional).
+    amount: Mapped[int] = mapped_column(Integer, default=0)
+    project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id"), nullable=True)
+    # Options members choose between, e.g. ["Approve", "Reject", "Abstain"].
+    options: Mapped[list] = mapped_column(JSON, default=list)
+    status: Mapped[str] = mapped_column(String(12), default="open", index=True)  # open | closed
+    # Minimum membership-tier index required to vote (0 = anyone eligible). Snapshot of the rule.
+    min_tier: Mapped[int] = mapped_column(Integer, default=1)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    closes_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    outcome: Mapped[str] = mapped_column(String(200), default="")  # filled when closed
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    votes: Mapped[list[Vote]] = relationship(back_populates="proposal", cascade="all, delete-orphan")
+
+
+class Vote(Base):
+    __tablename__ = "votes"
+    __table_args__ = (UniqueConstraint("proposal_id", "user_id", name="uq_vote_once"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    proposal_id: Mapped[int] = mapped_column(ForeignKey("proposals.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    choice: Mapped[str] = mapped_column(String(120))
+    # Snapshot of the voter's weight + points at the moment they voted (audit-friendly, immutable).
+    weight: Mapped[int] = mapped_column(Integer, default=1)
+    points_at_vote: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    proposal: Mapped[Proposal] = relationship(back_populates="votes")
+
+
+# --------------------------------------------------------------------------- rewards store
+# Points are spent by writing NEGATIVE ledger entries (category "redemption"), so the same
+# append-only, summed-balance model that powers the leaderboard also governs the wallet — there is
+# no separate mutable balance column to tamper with. Stock + balance are validated server-side.
+class Reward(Base):
+    __tablename__ = "rewards"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str] = mapped_column(Text, default="")
+    cost: Mapped[int] = mapped_column(Integer, default=0)                 # points price
+    kind: Mapped[str] = mapped_column(String(16), default="digital")      # digital | physical | perk
+    icon: Mapped[str] = mapped_column(String(16), default="🎁")
+    stock: Mapped[int] = mapped_column(Integer, default=-1)               # -1 = unlimited
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    redemptions: Mapped[list[Redemption]] = relationship(back_populates="reward", cascade="all, delete-orphan")
+
+
+class Redemption(Base):
+    __tablename__ = "redemptions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    reward_id: Mapped[int] = mapped_column(ForeignKey("rewards.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    cost_at_claim: Mapped[int] = mapped_column(Integer, default=0)        # snapshot price paid
+    status: Mapped[str] = mapped_column(String(12), default="claimed", index=True)  # claimed|fulfilled|cancelled
+    # Ledger entry that debited the points — the audit link that makes a refund exact & traceable.
+    ledger_dedupe: Mapped[str] = mapped_column(String(120), default="")
+    note: Mapped[str] = mapped_column(String(300), default="")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    reward: Mapped[Reward] = relationship(back_populates="redemptions")
+
+
+# --------------------------------------------------------------------------- grading & peer review
+# A CodeReviewSubmission is a piece of code submitted for automated checks + human peer review.
+# Automated results are computed server-side (sandboxed); peer reviews score against a rubric and,
+# once enough reviews land, the author is awarded points through the ledger.
+class CodeReviewSubmission(Base):
+    __tablename__ = "code_review_submissions"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    author_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    title: Mapped[str] = mapped_column(String(160))
+    language: Mapped[str] = mapped_column(String(24), default="python")
+    code: Mapped[str] = mapped_column(Text, default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    # Automated analysis snapshot: {score, issues:[...], lines, ...}
+    auto_report: Mapped[dict] = mapped_column(JSON, default=dict)
+    auto_score: Mapped[int] = mapped_column(Integer, default=0)          # 0-100
+    status: Mapped[str] = mapped_column(String(12), default="open", index=True)  # open|graded
+    review_goal: Mapped[int] = mapped_column(Integer, default=2)         # reviews needed to finalise
+    final_score: Mapped[float] = mapped_column(Float, default=0.0)       # avg peer score when graded
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    reviews: Mapped[list[PeerReview]] = relationship(back_populates="submission", cascade="all, delete-orphan")
+
+
+class PeerReview(Base):
+    __tablename__ = "peer_reviews"
+    __table_args__ = (UniqueConstraint("submission_id", "reviewer_id", name="uq_review_once"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    submission_id: Mapped[int] = mapped_column(ForeignKey("code_review_submissions.id"), index=True)
+    reviewer_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    # Rubric scores 1-5 each.
+    correctness: Mapped[int] = mapped_column(Integer, default=3)
+    readability: Mapped[int] = mapped_column(Integer, default=3)
+    efficiency: Mapped[int] = mapped_column(Integer, default=3)
+    comment: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    submission: Mapped[CodeReviewSubmission] = relationship(back_populates="reviews")

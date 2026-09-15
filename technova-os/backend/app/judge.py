@@ -156,3 +156,66 @@ def judge(code: str, function_name: str, sample_tests: list, hidden_tests: list)
         "feedback": feedback,
         "sample_results": sample_results,
     }
+
+
+def analyze_code(code: str, language: str = "python") -> dict:
+    """Automated, non-executing static analysis for the peer-review portal.
+
+    Returns {score 0-100, issues:[{level, msg}], metrics:{...}}. This does NOT run the code (peer
+    review submissions are arbitrary snippets, not a fixed function signature), so it relies on the
+    same safety blocklist plus cheap structural heuristics — fast, deterministic, and safe.
+    """
+    issues: list[dict] = []
+    lines = code.splitlines()
+    n_lines = len(lines)
+    non_blank = [ln for ln in lines if ln.strip()]
+
+    if not non_blank:
+        return {"score": 0, "issues": [{"level": "error", "msg": "Submission is empty."}],
+                "metrics": {"lines": 0}}
+
+    # security / disallowed constructs (reuse the sandbox blocklist)
+    blocked = _static_check(code)
+    if blocked:
+        issues.append({"level": "error", "msg": blocked})
+
+    # structural heuristics (language-aware where cheap)
+    longest = max((len(ln) for ln in lines), default=0)
+    if longest > 120:
+        issues.append({"level": "warn", "msg": f"Longest line is {longest} chars (>120). Consider wrapping."})
+
+    tabs = any("\t" in ln for ln in lines)
+    spaces = any(ln.startswith("    ") for ln in lines)
+    if tabs and spaces:
+        issues.append({"level": "warn", "msg": "Mixed tabs and spaces for indentation."})
+
+    trailing = sum(1 for ln in lines if ln != ln.rstrip())
+    if trailing:
+        issues.append({"level": "info", "msg": f"{trailing} line(s) have trailing whitespace."})
+
+    if language == "python":
+        import ast
+        try:
+            tree = ast.parse(code)
+            has_doc = ast.get_docstring(tree) is not None
+            funcs = [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+            documented = sum(1 for f in funcs if ast.get_docstring(f))
+            if funcs and documented == 0:
+                issues.append({"level": "info", "msg": "No function has a docstring."})
+            if not has_doc and not funcs:
+                issues.append({"level": "info", "msg": "No module docstring."})
+            if "except:" in code or "except :" in code:
+                issues.append({"level": "warn", "msg": "Bare 'except:' catches everything — narrow it."})
+        except SyntaxError as e:
+            issues.append({"level": "error", "msg": f"Syntax error: {e.msg} (line {e.lineno})."})
+
+    # scoring: start at 100, deduct by severity
+    weights = {"error": 35, "warn": 10, "info": 4}
+    score = 100 - sum(weights.get(i["level"], 5) for i in issues)
+    score = max(0, min(100, score))
+
+    return {
+        "score": score,
+        "issues": issues,
+        "metrics": {"lines": n_lines, "code_lines": len(non_blank), "longest_line": longest},
+    }

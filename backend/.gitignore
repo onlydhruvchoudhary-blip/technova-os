@@ -1,6 +1,0 @@
-__pycache__/
-*.db
-.env
-frontend_dist/
-backups/
-.pytest_cache/

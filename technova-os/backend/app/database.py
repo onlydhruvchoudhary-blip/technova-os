@@ -45,6 +45,24 @@ if _db_url.startswith("sqlite"):
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
+# Real-time fan-out: drain messages that engine helpers stashed on the session, but ONLY after the
+# transaction actually commits (so rolled-back writes are never broadcast). Registered once on the
+# Session class — the correct pattern; per-call listeners leak and fire in a committed state.
+@event.listens_for(Session, "after_commit")
+def _drain_pending_publishes(session):  # pragma: no cover - exercised via integration
+    pending = session.info.pop("_pending_publishes", None)
+    if not pending:
+        return
+    from .broker import broker
+    for topic, data, target in pending:
+        broker.publish(topic, data, target)
+
+
+@event.listens_for(Session, "after_rollback")
+def _discard_pending_publishes(session):  # pragma: no cover - trivial
+    session.info.pop("_pending_publishes", None)
+
+
 class Base(DeclarativeBase):
     pass
 

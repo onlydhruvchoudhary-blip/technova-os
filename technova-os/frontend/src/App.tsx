@@ -18,8 +18,13 @@ import CompetitionView from './pages/CompetitionView'
 import Leaderboard from './pages/Leaderboard'
 import Profile from './pages/Profile'
 import Members from './pages/Members'
+import Governance from './pages/Governance'
+import Store from './pages/Store'
+import Grading from './pages/Grading'
+import GradingView from './pages/GradingView'
 import Resources from './pages/Resources'
 import Showcase from './pages/Showcase'
+import Activity from './pages/Activity'
 import Admin from './pages/Admin'
 import CommandCenter from './pages/CommandCenter'
 import Verify from './pages/Verify'
@@ -58,9 +63,14 @@ export default function App() {
         <Route path="/leaderboard" element={<Leaderboard />} />
         <Route path="/profile" element={<Profile />} />
         <Route path="/members" element={<Members />} />
+        <Route path="/governance" element={<Governance />} />
+        <Route path="/store" element={<Store />} />
+        <Route path="/grading" element={<Grading />} />
+        <Route path="/grading/:id" element={<GradingView />} />
         <Route path="/members/:id" element={<Profile />} />
         <Route path="/resources" element={<Resources />} />
         <Route path="/showcase" element={<Showcase />} />
+        <Route path="/activity" element={<Activity />} />
         <Route path="/admin" element={<Admin />} />
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>

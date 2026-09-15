@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from .. import engine
 from ..database import get_db
 from ..models import (
+    ActivityEvent,
     Announcement,
     AuditLog,
     Certificate,
@@ -82,30 +83,104 @@ async def notifications_stream(token: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="Not authenticated")
     user_id = user.id
 
+    from ..broker import broker
+
+    def _unread() -> int:
+        s = SessionLocal()
+        try:
+            return int(s.execute(
+                select(func.count(Notification.id)).where(
+                    Notification.user_id == user_id, Notification.read == False)  # noqa
+            ).scalar_one())
+        finally:
+            s.close()
+
     async def event_gen():
-        last_seen = -1
-        # Cap the connection lifetime; the browser EventSource transparently reconnects.
-        for _ in range(120):  # ~2 minutes at 1s cadence
-            s = SessionLocal()
-            try:
-                unread = s.execute(
-                    select(func.count(Notification.id)).where(
-                        Notification.user_id == user_id, Notification.read == False)  # noqa
-                ).scalar_one()
-                latest = s.execute(
-                    select(Notification).where(Notification.user_id == user_id)
-                    .order_by(Notification.created_at.desc()).limit(1)
-                ).scalar_one_or_none()
-            finally:
-                s.close()
-            latest_id = latest.id if latest else 0
-            if latest_id != last_seen:
-                last_seen = latest_id
-                payload = {"unread": int(unread),
-                           "latest": ({"id": latest.id, "kind": latest.kind, "title": latest.title,
-                                       "body": latest.body, "link": latest.link} if latest else None)}
-                yield f"data: {_json.dumps(payload)}\n\n"
-            await asyncio.sleep(1)
+        # Event-driven: push the current unread count once, then only when a new notification for
+        # THIS user is published to the broker. No per-second polling per connection.
+        q = broker.subscribe("notify", user_id=user_id)
+        try:
+            yield f"data: {_json.dumps({'unread': _unread(), 'latest': None})}\n\n"
+            deadline = asyncio.get_event_loop().time() + 120
+            while asyncio.get_event_loop().time() < deadline:
+                try:
+                    msg = await asyncio.wait_for(q.get(), timeout=20)
+                    payload = {"unread": _unread(),
+                               "latest": {"kind": msg.data.get("kind"),
+                                          "title": msg.data.get("title"),
+                                          "body": msg.data.get("body"),
+                                          "link": msg.data.get("link")}}
+                    yield f"data: {_json.dumps(payload)}\n\n"
+                except TimeoutError:
+                    yield ": keepalive\n\n"
+        finally:
+            broker.unsubscribe(q)
+        yield "event: reconnect\ndata: {}\n\n"
+
+    from starlette.responses import StreamingResponse
+    return StreamingResponse(event_gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+# ---------------------------------------------------------------- activity feed (club pulse)
+def _activity_dict(a: ActivityEvent) -> dict:
+    return {"id": a.id, "kind": a.kind, "icon": a.icon, "actor": a.actor_name,
+            "text": a.text, "link": a.link, "points": a.points,
+            "created_at": a.created_at.isoformat() if a.created_at else None}
+
+
+@router.get("/activity")
+def activity_feed(limit: int = 30, before: int | None = None,
+                  db: Session = Depends(get_db),
+                  _user: User = Depends(get_current_user)):
+    """Paginated, club-wide public activity pulse (newest first).
+
+    Keyset pagination via `before` (an event id) keeps it O(limit) regardless of table size —
+    pass the smallest id you've already seen to fetch the next page.
+    """
+    limit = max(1, min(limit, 100))
+    stmt = select(ActivityEvent).order_by(ActivityEvent.id.desc()).limit(limit)
+    if before:
+        stmt = select(ActivityEvent).where(ActivityEvent.id < before).order_by(
+            ActivityEvent.id.desc()).limit(limit)
+    rows = list(db.execute(stmt).scalars())
+    return {"items": [_activity_dict(a) for a in rows],
+            "next_before": rows[-1].id if len(rows) == limit else None}
+
+
+@router.get("/activity/stream")
+async def activity_stream(token: str, db: Session = Depends(get_db)):
+    """SSE stream of the live club activity pulse. Auth via ?token= (EventSource can't set headers).
+
+    Bounded lifetime (self-recycles ~2 min); the browser EventSource reconnects transparently.
+    Emits only events newer than the highest id seen at connect time, so reconnects don't replay.
+    """
+    import asyncio
+    import json as _json
+
+    from ..security import user_from_token
+
+    user = user_from_token(token, db)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    from ..broker import broker
+
+    async def event_gen():
+        # Event-driven: subscribe to the broker and forward pushed frames. No per-second DB poll.
+        q = broker.subscribe("activity")
+        try:
+            yield ": connected\n\n"  # immediate frame so clients/proxies confirm the open stream
+            # bounded lifetime; browser EventSource reconnects transparently
+            deadline = asyncio.get_event_loop().time() + 120
+            while asyncio.get_event_loop().time() < deadline:
+                try:
+                    msg = await asyncio.wait_for(q.get(), timeout=20)
+                    yield f"data: {_json.dumps(msg.data)}\n\n"
+                except TimeoutError:
+                    yield ": keepalive\n\n"  # comment frame keeps the connection warm
+        finally:
+            broker.unsubscribe(q)
         yield "event: reconnect\ndata: {}\n\n"
 
     from starlette.responses import StreamingResponse

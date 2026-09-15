@@ -527,6 +527,50 @@ def seed(reset: bool = False):
         eng.grant_achievement(db, m3.id, "first_project", "project:seed")
         db.commit()
 
+        # ---- governance: a couple of demo proposals so the Governance page isn't empty
+        from .models import Proposal, Vote
+        prop1 = Proposal(
+            title="Should we host a 24-hour hackathon next month?",
+            description="A club-wide overnight hackathon with prizes. Vote to help us decide.",
+            kind="decision",
+            options=["Approve", "Reject", "Abstain"],
+            status="open", min_tier=1, created_by=head.id,
+            closes_at=now + dt.timedelta(days=7),
+        )
+        prop2 = Proposal(
+            title="Fund the Smart Attendance project (₹5,000 for hardware)?",
+            description="Requesting a budget for RFID readers and a Raspberry Pi to finish the build.",
+            kind="funding", amount=5000, options=["Approve", "Reject", "Abstain"],
+            status="open", min_tier=1, created_by=head.id,
+            closes_at=now + dt.timedelta(days=10),
+        )
+        db.add_all([prop1, prop2])
+        db.flush()
+        # a few authentic weighted votes from members who have earned voting tier
+        for voter, choice in [(m1, "Approve"), (m3, "Approve"), (m2, "Reject")]:
+            pts = eng.total_points(db, voter.id)
+            from .governance import tier_for_points, vote_weight
+            if tier_for_points(pts)["index"] >= 1:
+                db.add(Vote(proposal_id=prop1.id, user_id=voter.id, choice=choice,
+                            weight=vote_weight(pts), points_at_vote=pts))
+        db.commit()
+
+        # ---- rewards store: a starter catalog so the shop isn't empty
+        from .models import Reward
+        _rewards = [
+            ("TECHNOVA Sticker Pack", "A set of vinyl laptop stickers with the club logo.", 150, "physical", "🏷️", -1),
+            ("Club T-Shirt", "Official TECHNOVA tee. Pick your size at pickup.", 1200, "physical", "👕", 25),
+            ("Hoodie (Top Earners)", "Premium embroidered hoodie.", 4000, "physical", "🧥", 10),
+            ("Skip-the-Queue Lab Pass", "Priority access to the lab & good equipment for a week.", 800, "perk", "🔑", -1),
+            ("Custom Profile Banner", "A digital banner + badge on your public portfolio.", 500, "digital", "🎨", -1),
+            ("Pizza at Next Meetup", "A free pizza voucher for the next club meetup.", 600, "perk", "🍕", 40),
+            ("1:1 Mentor Session", "A 30-minute session with a senior mentor of your choice.", 1000, "perk", "🧑\u200d🏫", -1),
+            ("Raspberry Pi Kit", "A Pi starter kit for your next hardware build.", 6000, "physical", "🔌", 5),
+        ]
+        for name, desc, cost, kind, icon, stock in _rewards:
+            db.add(Reward(name=name, description=desc, cost=cost, kind=kind, icon=icon, stock=stock))
+        db.commit()
+
         print("Seed complete. Login: admin@technova.club / password123")
     finally:
         db.close()

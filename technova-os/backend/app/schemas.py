@@ -169,3 +169,58 @@ class AnnouncementIn(BaseModel):
 
 class RoleUpdate(BaseModel):
     role: str
+
+
+# ---- governance
+class ProposalCreate(BaseModel):
+    title: str = Field(min_length=4, max_length=200)
+    description: str = Field(default="", max_length=4000)
+    kind: str = Field(default="decision")  # "decision" | "funding"
+    amount: int = Field(default=0, ge=0)
+    project_id: int | None = None
+    options: list[str] = Field(default_factory=lambda: ["Approve", "Reject", "Abstain"])
+    closes_in_days: int = Field(default=7, ge=1, le=90)
+
+
+class VoteIn(BaseModel):
+    choice: str = Field(min_length=1, max_length=120)
+
+
+# ---- rewards store
+class RewardCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=160)
+    description: str = Field(default="", max_length=2000)
+    cost: int = Field(ge=1)
+    kind: str = Field(default="digital")  # digital | physical | perk
+    icon: str = Field(default="🎁", max_length=16)
+    stock: int = Field(default=-1, ge=-1)  # -1 = unlimited
+
+
+class RewardUpdate(BaseModel):
+    name: str | None = Field(default=None, max_length=160)
+    description: str | None = Field(default=None, max_length=2000)
+    cost: int | None = Field(default=None, ge=1)
+    kind: str | None = None
+    icon: str | None = Field(default=None, max_length=16)
+    stock: int | None = Field(default=None, ge=-1)
+    active: bool | None = None
+
+
+class RedemptionUpdate(BaseModel):
+    status: str = Field(pattern="^(claimed|fulfilled|cancelled)$")
+    note: str = Field(default="", max_length=300)
+
+
+# ---- grading & peer review
+class CodeSubmissionIn(BaseModel):
+    title: str = Field(min_length=3, max_length=160)
+    language: str = Field(default="python", max_length=24)
+    code: str = Field(min_length=1, max_length=20000)
+    description: str = Field(default="", max_length=2000)
+
+
+class PeerReviewIn(BaseModel):
+    correctness: int = Field(ge=1, le=5)
+    readability: int = Field(ge=1, le=5)
+    efficiency: int = Field(ge=1, le=5)
+    comment: str = Field(default="", max_length=2000)

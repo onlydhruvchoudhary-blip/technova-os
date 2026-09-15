@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import { api } from '../api'
 import { useToast } from '../store'
 import { Spinner, DiffBadge } from '../ui'
+import CodeEditor from '../CodeEditor'
 
 export default function ChallengeView() {
   const { slug } = useParams()
@@ -10,10 +11,28 @@ export default function ChallengeView() {
   const [ch, setCh] = useState<any>(null)
   const [code, setCode] = useState('')
   const [busy, setBusy] = useState(false)
+  const [running, setRunning] = useState(false)
   const [result, setResult] = useState<any>(null)
 
-  useEffect(() => { api.get(`/challenges/${slug}`).then(c => { setCh(c); setCode(c.last_code || c.starter_code) }) }, [slug])
+  useEffect(() => {
+    const ac = new AbortController()
+    api.get(`/challenges/${slug}`, ac.signal)
+      .then(c => { setCh(c); setCode(c.last_code || c.starter_code) })
+      .catch(() => { /* aborted or failed */ })
+    return () => ac.abort()
+  }, [slug])
   if (!ch) return <Spinner />
+
+  // Live sandbox: run against VISIBLE sample tests only. No points, no persistence, no hidden tests.
+  const run = async () => {
+    setRunning(true); setResult(null)
+    try {
+      const r = await api.post(`/challenges/${slug}/run`, { code })
+      setResult(r)
+      push(r.passed ? 'Sample tests passed — try Submit for the full run.' : 'Some sample tests failed.',
+        r.passed ? 'success' : 'error')
+    } catch (e: any) { push(e.message, 'error') } finally { setRunning(false) }
+  }
 
   const submit = async () => {
     setBusy(true); setResult(null)
@@ -59,18 +78,27 @@ export default function ChallengeView() {
         </div>
 
         <div>
-          <textarea className="code-editor" value={code} onChange={e => setCode(e.target.value)} spellCheck={false} />
+          <CodeEditor value={code} onChange={setCode} />
           <div className="row" style={{ marginTop: 12, justifyContent: 'flex-end' }}>
             <button className="btn" onClick={() => setCode(ch.starter_code)}>Reset</button>
-            <button className="btn primary" onClick={submit} disabled={busy}>{busy ? 'Judging…' : 'Submit'}</button>
+            <button className="btn" onClick={run} disabled={running || busy}>{running ? 'Running…' : '▶ Run sample tests'}</button>
+            <button className="btn primary" onClick={submit} disabled={busy || running}>{busy ? 'Judging…' : 'Submit'}</button>
           </div>
+          <p className="faint" style={{ fontSize: 12, marginTop: 6, textAlign: 'right' }}>
+            Run tries your code against the visible samples only — no points, no penalty. Submit runs the hidden tests too.
+          </p>
 
           {result && (
             <div className="card" style={{ marginTop: 14, borderColor: result.passed ? 'var(--success)' : 'var(--danger)' }}>
               <div className="row between">
-                <h3 style={{ margin: 0 }}>{result.passed ? '✅ Accepted' : '❌ Not accepted'}</h3>
+                <h3 style={{ margin: 0 }}>
+                  {result.sandbox
+                    ? (result.passed ? '▶ Sample tests passed' : '▶ Sample run — failures')
+                    : (result.passed ? '✅ Accepted' : '❌ Not accepted')}
+                </h3>
                 <span className="badge">{result.tests_passed}/{result.tests_total} tests passed</span>
               </div>
+              {result.sandbox && <p className="faint" style={{ fontSize: 12, margin: '0 0 6px' }}>Sandbox run — hidden tests not included. Hit Submit for the graded run.</p>}
               <p className="muted" style={{ marginBottom: 8 }}>{result.feedback}</p>
               {result.sample_results.map((r: any, i: number) => (
                 <div key={i} className="test-row" style={{ borderLeft: `3px solid ${r.ok ? 'var(--success)' : 'var(--danger)'}` }}>

@@ -25,7 +25,8 @@ export class ApiError extends Error {
   constructor(status: number, message: string) { super(message); this.status = status }
 }
 
-async function req<T = any>(method: string, path: string, body?: any, isForm = false): Promise<T> {
+async function req<T = any>(method: string, path: string, body?: any, isForm = false,
+                            signal?: AbortSignal): Promise<T> {
   const headers: Record<string, string> = {}
   const token = getToken()
   if (token) {
@@ -47,7 +48,7 @@ async function req<T = any>(method: string, path: string, body?: any, isForm = f
   // credentials:'include' sends the auth cookie — this is the primary auth mechanism because
   // some preview/reverse proxies strip the Authorization header. The header is still sent as a
   // fallback for environments (like local dev) where cookies aren't in play.
-  const res = await fetch(`/api${path}`, { method, headers, body: payload, credentials: 'include' })
+  const res = await fetch(`/api${path}`, { method, headers, body: payload, credentials: 'include', signal })
   if (res.status === 204) return undefined as T
   const text = await res.text()
   const data = text ? JSON.parse(text) : undefined
@@ -61,8 +62,13 @@ async function req<T = any>(method: string, path: string, body?: any, isForm = f
 }
 
 export const api = {
-  get: <T = any>(p: string) => req<T>('GET', p),
-  post: <T = any>(p: string, body?: any) => req<T>('POST', p, body),
-  patch: <T = any>(p: string, body?: any) => req<T>('PATCH', p, body),
-  form: <T = any>(p: string, body: any) => req<T>('POST', p, body, true),
+  get: <T = any>(p: string, signal?: AbortSignal) => req<T>('GET', p, undefined, false, signal),
+  post: <T = any>(p: string, body?: any, signal?: AbortSignal) => req<T>('POST', p, body, false, signal),
+  patch: <T = any>(p: string, body?: any, signal?: AbortSignal) => req<T>('PATCH', p, body, false, signal),
+  form: <T = any>(p: string, body: any, signal?: AbortSignal) => req<T>('POST', p, body, true, signal),
+}
+
+// True if an error is an aborted-fetch (safe to ignore in unmount cleanup).
+export function isAbort(e: unknown): boolean {
+  return e instanceof DOMException && e.name === 'AbortError'
 }

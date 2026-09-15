@@ -270,3 +270,204 @@ a:focus-visible, .btn:focus-visible, .input:focus-visible, button:focus-visible 
 @media (prefers-reduced-motion: reduce) {
   .content > *, .card-hover, .skeleton, .toast, .spinner { animation: none !important; transition: none !important; }
 }
+
+/* ============================================================= *
+ * Cycle 1 design-system upgrade: glassmorphism, refined         *
+ * scrollbars, and subtle micro-interactions (no motion excess). *
+ * ============================================================= */
+
+/* Custom scrollbar — track + hover state, theme-aware */
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(var(--border), var(--surface-2));
+  border-radius: 8px; border: 2px solid transparent; background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--primary); background-clip: padding-box; }
+* { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+
+/* Glassmorphism surface — used for wallet, palette, elevated panels */
+.glass-card {
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+/* Card micro-interaction — gentle lift + accent border on hover */
+.card {
+  transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
+  will-change: transform;
+}
+.card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 34px rgba(0,0,0,.28);
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+}
+@media (prefers-reduced-motion: reduce) {
+  .card, .card:hover, .btn { transition: none; transform: none; }
+}
+
+/* Reward store cards — a touch more presence */
+.reward-card { display: flex; flex-direction: column; }
+.reward-card h3 { line-height: 1.25; }
+
+/* Button press feedback + focus-visible ring for accessibility */
+.btn { transition: transform .1s ease, filter .15s ease, background .15s ease; }
+.btn:active { transform: translateY(1px) scale(.99); }
+.btn:not(:disabled):hover { filter: brightness(1.06); }
+:where(a, button, input, select, textarea):focus-visible {
+  outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 6px;
+}
+
+/* Badge subtle polish */
+.badge { transition: background .15s ease, color .15s ease; }
+
+/* ============================================================= *
+ * Cycle 4 — command palette, breadcrumbs, ambient background.   *
+ * ============================================================= */
+
+/* Command palette trigger in the topbar */
+.cmdk-trigger {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  flex: 1; max-width: 420px; padding: 8px 12px; cursor: pointer;
+  background: var(--bg-2); color: var(--text-faint);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  font-size: 13px; transition: border-color .15s ease, color .15s ease;
+}
+.cmdk-trigger:hover { border-color: var(--primary); color: var(--text-dim); }
+.cmdk-kbd, .cmdk-foot kbd {
+  font-family: var(--mono); font-size: 11px; padding: 1px 6px; border-radius: 5px;
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--text-dim);
+}
+
+/* Palette overlay */
+.cmdk-backdrop {
+  position: fixed; inset: 0; z-index: 100; display: flex; justify-content: center;
+  align-items: flex-start; padding-top: 12vh;
+  background: rgba(4,7,14,.55); backdrop-filter: blur(3px);
+  animation: cmdkIn .12s ease;
+}
+@keyframes cmdkIn { from { opacity: 0; } to { opacity: 1; } }
+.cmdk {
+  width: min(600px, 92vw); max-height: 66vh; display: flex; flex-direction: column;
+  overflow: hidden; animation: cmdkPop .14s cubic-bezier(.2,.8,.3,1);
+}
+@keyframes cmdkPop { from { transform: translateY(-8px) scale(.98); opacity: .6; } to { transform: none; opacity: 1; } }
+.cmdk-input {
+  border: none; outline: none; background: transparent; color: var(--text);
+  font-size: 16px; padding: 16px 18px; border-bottom: 1px solid var(--border);
+}
+.cmdk-list { overflow-y: auto; padding: 6px; }
+.cmdk-empty { padding: 20px; text-align: center; color: var(--text-faint); font-size: 14px; }
+.cmdk-item {
+  display: flex; align-items: center; gap: 12px; padding: 10px 12px;
+  border-radius: var(--radius-sm); cursor: pointer;
+}
+.cmdk-item.active { background: color-mix(in srgb, var(--primary) 18%, transparent); }
+.cmdk-ico { width: 22px; text-align: center; }
+.cmdk-label { flex: 1; font-size: 14px; }
+.cmdk-hint {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-faint);
+  border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px;
+}
+.cmdk-foot {
+  display: flex; gap: 16px; padding: 8px 14px; border-top: 1px solid var(--border);
+  font-size: 11px; color: var(--text-faint);
+}
+.cmdk-foot span { display: inline-flex; align-items: center; gap: 4px; }
+
+/* Breadcrumbs */
+.crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-bottom: 14px; font-size: 13px; }
+.crumb-wrap { display: inline-flex; align-items: center; gap: 4px; }
+.crumb { color: var(--text-faint); text-transform: capitalize; transition: color .15s ease; }
+.crumb:hover { color: var(--primary); }
+.crumb.current { color: var(--text); font-weight: 600; }
+.crumb-sep { color: var(--text-faint); opacity: .5; }
+
+/* Ambient animated background — subtle drifting gradient orbs behind everything */
+.app-shell::before {
+  content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none; opacity: .5;
+  background:
+    radial-gradient(500px 500px at 12% 18%, rgba(91,140,255,.14), transparent 60%),
+    radial-gradient(460px 460px at 88% 82%, rgba(34,211,238,.12), transparent 60%),
+    radial-gradient(420px 420px at 70% 12%, rgba(124,92,255,.10), transparent 60%);
+  animation: ambientDrift 26s ease-in-out infinite alternate;
+}
+@keyframes ambientDrift {
+  from { transform: translate3d(0,0,0) scale(1); }
+  to   { transform: translate3d(0,-2%,0) scale(1.06); }
+}
+.sidebar, .main { position: relative; z-index: 1; }
+@media (prefers-reduced-motion: reduce) { .app-shell::before { animation: none; } }
+
+/* ---- Live activity feed ---- */
+.act-list { display: flex; flex-direction: column; }
+.act-row {
+  display: flex; gap: 10px; align-items: flex-start;
+  padding: 9px 6px; border-top: 1px solid var(--border);
+  border-radius: 8px; color: inherit; text-decoration: none;
+  transition: background .14s ease;
+}
+.act-row:first-child { border-top: none; }
+a.act-row:hover { background: var(--surface-2, rgba(127,127,127,.08)); }
+.act-ico {
+  flex: none; width: 30px; height: 30px; border-radius: 9px;
+  display: grid; place-items: center; font-size: 15px;
+  background: var(--surface-2, rgba(127,127,127,.1));
+}
+.act-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.act-text { font-size: 13.5px; line-height: 1.35; }
+.act-text b { font-weight: 650; }
+.act-time { font-size: 11.5px; }
+.act-fresh { animation: actIn .5s ease; }
+@keyframes actIn {
+  from { background: color-mix(in srgb, var(--accent, #6d5efb) 22%, transparent); }
+  to { background: transparent; }
+}
+.live-dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: #22c55e; margin-right: 7px; vertical-align: middle;
+  box-shadow: 0 0 0 0 rgba(34,197,94,.6); animation: livePulse 1.8s infinite;
+}
+@keyframes livePulse {
+  0% { box-shadow: 0 0 0 0 rgba(34,197,94,.5); }
+  70% { box-shadow: 0 0 0 7px rgba(34,197,94,0); }
+  100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .act-fresh, .live-dot { animation: none; }
+}
+
+/* ---- Syntax-highlighted code editor (dependency-free) ---- */
+.ce-wrap {
+  display: flex; background: #0a0e18; border: 1px solid var(--border);
+  border-radius: 12px; overflow: hidden; font-family: var(--mono);
+  font-size: 13px; line-height: 1.6; tab-size: 4;
+}
+.ce-gutter {
+  flex: none; padding: 14px 10px 14px 14px; text-align: right;
+  color: #445; user-select: none; background: #070a12;
+  border-right: 1px solid rgba(255,255,255,.05); min-width: 42px;
+}
+.ce-code { position: relative; flex: 1; overflow: hidden; }
+/* pre and textarea must share identical box metrics so the caret lines up with the paint. */
+.ce-pre, .ce-ta {
+  margin: 0; padding: 14px; border: 0; font-family: var(--mono);
+  font-size: 13px; line-height: 1.6; tab-size: 4; white-space: pre;
+  overflow: auto; box-sizing: border-box; width: 100%; height: 100%;
+  min-height: 340px;
+}
+.ce-pre { color: #d6e0f5; pointer-events: none; }
+.ce-ta {
+  position: absolute; inset: 0; background: transparent; resize: none;
+  color: transparent; caret-color: #7ea6ff; outline: none;
+  -webkit-text-fill-color: transparent;
+}
+.ce-ta::selection { background: rgba(126,166,255,.28); }
+.tk-kw  { color: #ff7ab2; font-weight: 600; }
+.tk-bi  { color: #7ee0c7; }
+.tk-str { color: #e6c07b; }
+.tk-num { color: #9c8bff; }
+.tk-com { color: #5a6478; font-style: italic; }

@@ -50,3 +50,12 @@ def test_sse_stream_requires_valid_token(client):
     assert client.get("/api/notifications/stream").status_code == 422
     r = client.get("/api/notifications/stream?token=not-valid")
     assert r.status_code == 401
+
+
+def test_validation_error_returns_clean_envelope(client):
+    # Missing required fields -> 422 with a human-readable `detail` + `errors` list + request id.
+    r = client.post("/api/auth/register", json={"email": "not-an-email"})
+    assert r.status_code == 422
+    body = r.json()
+    assert "detail" in body and isinstance(body["detail"], str)
+    assert "errors" in body

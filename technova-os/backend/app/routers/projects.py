@@ -52,6 +52,84 @@ def list_projects(user: User = Depends(get_current_user), db: Session = Depends(
     return out
 
 
+# ---------------------------------------------------------------- GitHub sync (server-side proxy)
+# The browser (especially the sandboxed preview iframe) can't call GitHub directly, and doing so
+# client-side would leak rate-limit budget per visitor. The backend fetches once and caches briefly.
+import time as _time  # noqa: E402
+import urllib.error  # noqa: E402
+import urllib.request  # noqa: E402
+from json import loads as _json_loads  # noqa: E402
+
+_GH_CACHE: dict[str, tuple[float, dict]] = {}
+_GH_TTL = 300  # seconds
+_GH_RE = re.compile(r"github\.com[/:]([\w.-]+)/([\w.-]+?)(?:\.git)?/?$")
+
+
+def _parse_repo(repo_url: str) -> tuple[str, str] | None:
+    m = _GH_RE.search((repo_url or "").strip())
+    if not m:
+        return None
+    return m.group(1), m.group(2)
+
+
+def _gh_get(path: str) -> dict | list | None:
+    req = urllib.request.Request(
+        f"https://api.github.com{path}",
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "technova-os"},
+    )
+    with urllib.request.urlopen(req, timeout=6) as resp:  # noqa: S310 (trusted host)
+        return _json_loads(resp.read().decode())
+
+
+@router.get("/{slug}/github")
+def github_stats(slug: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Live repo stats: stars, forks, open issues, last 5 commits. Cached ~5 min; degrades gracefully."""
+    p = db.execute(select(Project).where(Project.slug == slug)).scalar_one_or_none()
+    if not p:
+        raise HTTPException(status_code=404, detail="Project not found")
+    parsed = _parse_repo(p.repo_url)
+    if not parsed:
+        return {"linked": False, "reason": "No GitHub repository linked to this project."}
+    owner, repo = parsed
+    key = f"{owner}/{repo}"
+
+    now = _time.time()
+    cached = _GH_CACHE.get(key)
+    if cached and now - cached[0] < _GH_TTL:
+        return cached[1]
+
+    try:
+        meta = _gh_get(f"/repos/{owner}/{repo}")
+        if not isinstance(meta, dict) or "stargazers_count" not in meta:
+            raise ValueError("unexpected response")
+        commits_raw = _gh_get(f"/repos/{owner}/{repo}/commits?per_page=5")
+        commits = [{
+            "sha": (c.get("sha") or "")[:7],
+            "message": (c.get("commit", {}).get("message") or "").split("\n")[0][:100],
+            "author": c.get("commit", {}).get("author", {}).get("name", "unknown"),
+            "date": c.get("commit", {}).get("author", {}).get("date", ""),
+            "url": c.get("html_url", ""),
+        } for c in (commits_raw or [])[:5]] if isinstance(commits_raw, list) else []
+        result = {
+            "linked": True,
+            "repo": key,
+            "url": meta.get("html_url", p.repo_url),
+            "stars": meta.get("stargazers_count", 0),
+            "forks": meta.get("forks_count", 0),
+            "open_issues": meta.get("open_issues_count", 0),
+            "language": meta.get("language"),
+            "description": meta.get("description"),
+            "pushed_at": meta.get("pushed_at"),
+            "commits": commits,
+        }
+        _GH_CACHE[key] = (now, result)
+        return result
+    except (urllib.error.URLError, urllib.error.HTTPError, ValueError, TimeoutError, OSError) as e:
+        # Never 500 on an upstream hiccup or rate limit — the UI shows a graceful fallback.
+        return {"linked": True, "repo": key, "error": "GitHub is unreachable or rate-limited.",
+                "detail": str(e)[:120]}
+
+
 def _project_card(db: Session, p: Project, user: User | None) -> dict:
     members = [pm for pm in p.members if pm.status == "member"]
     return {
@@ -59,6 +137,7 @@ def _project_card(db: Session, p: Project, user: User | None) -> dict:
         "state": p.state, "required_skills": p.required_skills, "tech": p.tech,
         "team_size": p.team_size, "member_count": len(members), "showcase": p.showcase,
         "owner_id": p.owner_id, "mentor_id": p.mentor_id,
+        "repo_url": p.repo_url, "demo_url": p.demo_url,
         "is_member": bool(user and _is_team(db, p, user)),
     }
 
